@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asset tokenization</title>
+  </head>
+  <body>
+    <main>
+      <header><p class="eyebrow">ASSET TOKENIZATION</p><h1>Create an asset token</h1>
+        <p>Register your asset onchain. The connected wallet receives the entire initial token supply.</p>
+      </header>
+      <section aria-labelledby="connection-title">
+        <h2 id="connection-title">1. Connect</h2>
+        <label>Expected chain ID<input id="chain" inputmode="numeric" placeholder="11155111 (Sepolia)" required /></label>
+        <label>Deployed factory address<input id="factory" placeholder="0x…" required /></label>
+        <button id="connect" type="button">Connect wallet</button>
+        <p id="wallet">No wallet connected.</p>
+      </section>
+      <section aria-labelledby="create-title">
+        <h2 id="create-title">2. Describe your asset</h2>
+        <form id="create-form">
+          <div class="grid">
+            <label>Asset ID<input name="assetId" required placeholder="PROPERTY-001" /></label>
+            <label>Asset name<input name="assetName" required placeholder="Main Street apartment" /></label>
+            <label>Asset type<input name="assetType" required placeholder="Real estate" /></label>
+            <label>Valuation (whole units)<input name="valuation" required inputmode="numeric" pattern="[0-9]+" placeholder="250000" /></label>
+            <label>Currency<input name="currency" required placeholder="USD" /></label>
+            <label>Metadata URI<input name="metadataURI" required placeholder="ipfs://… or https://…" /></label>
+            <label>Token name<input name="tokenName" required placeholder="Main Street Token" /></label>
+            <label>Token symbol<input name="tokenSymbol" required placeholder="MAIN" /></label>
+            <label>Initial supply (whole tokens)<input name="initialSupply" required inputmode="numeric" pattern="[0-9]+" value="1000" /></label>
+            <label>Document hash (optional bytes32)<input name="documentHash" placeholder="0x followed by 64 hex characters" /></label>
+          </div>
+          <p class="hint">Supply is minted once, at creation. Enter 1000 for 1,000 tokens. A blank document hash is stored as zero. Asset information is public.</p>
+          <button type="submit">Create token &amp; mint initial supply</button>
+        </form>
+      </section>
+      <section aria-labelledby="lookup-title">
+        <h2 id="lookup-title">3. Read from the blockchain</h2>
+        <form id="lookup-form"><label>Asset ID<input id="lookup-id" required placeholder="PROPERTY-001" /></label><button type="submit">Look up / refresh token</button></form>
+        <dl id="result"></dl>
+        <button id="mint-check" type="button" disabled>Check extra mint rejection (simulation)</button>
+        <p class="hint">Simulates mint(address,uint256) from the connected wallet. No transaction is sent and no gas is spent. This contract exposes no additional mint function, so every caller should be rejected.</p>
+      </section>
+      <p id="status" role="status" aria-live="polite">Connect a browser wallet on the same network as your factory.</p>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

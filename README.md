@@ -1,4 +1,19 @@
-# Remix IDE Blank Template
+# Asset tokenization
+
+The minimal wallet-connected frontend, setup instructions, minting explanation,
+and automated blockchain tests are in [frontend/README.md](frontend/README.md).
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+Deploy the factory first, then enter its address and chain ID in the frontend.
+Run `npm test` for local blockchain checks and `npm run build` for a production
+build. GitHub Actions runs both checks on pushes and pull requests.
+
+## Original Remix workspace notes
 
 Welcome to your new **Remix IDE Blank Workspace**!
 

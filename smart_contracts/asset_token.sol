@@ -23,6 +23,7 @@ contract AssetToken is ERC20, AccessControl {
     Asset public asset;
 
     constructor(
+        address issuer,
         string memory tokenName,
         string memory tokenSymbol,
         uint256 initialSupply,
@@ -37,8 +38,8 @@ contract AssetToken is ERC20, AccessControl {
     )
         ERC20(tokenName, tokenSymbol)
     {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(ADMIN_ROLE, msg.sender);
+        _grantRole(DEFAULT_ADMIN_ROLE, issuer);
+        _grantRole(ADMIN_ROLE, issuer);
 
         asset = Asset({
             assetId: assetId,
@@ -52,6 +53,6 @@ contract AssetToken is ERC20, AccessControl {
             active: true
         });
 
-        _mint(msg.sender, initialSupply * 10 ** decimals());
+        _mint(issuer, initialSupply * 10 ** decimals());
     }
 }
