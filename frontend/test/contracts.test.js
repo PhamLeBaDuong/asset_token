@@ -25,7 +25,7 @@ test("input conversion preserves integers and rejects invalid inputs", () => {
   assert.throws(() => creationArgs({ ...sample, assetId: " " }));
 });
 
-let factoryArtifact;
+let factoryArtifact, tokenArtifact;
 function compileFactory() {
   if (factoryArtifact) return factoryArtifact;
   const sources = Object.fromEntries(["asset_factory.sol", "asset_token.sol"].map((name) =>
@@ -40,6 +40,7 @@ function compileFactory() {
   } }));
   assert.deepEqual((output.errors || []).filter((error) => error.severity === "error"), []);
   factoryArtifact = output.contracts["asset_factory.sol"].AssetTokenFactory;
+  tokenArtifact = output.contracts["asset_token.sol"].AssetToken;
   return factoryArtifact;
 }
 
@@ -129,6 +130,91 @@ test("checkpoint step 2: Alice transfers to Bob, then Bob transfers to Carol", a
     assert.equal(carolView.connectedBalance, parseUnits("2500", data.decimals));
     assert.equal(carolView.transactionHash, creation.hash, "creation transaction stays distinct from transfer");
     console.log("Step 2 verified: Alice 90,000 | Bob 7,500 | Carol 2,500 DCOF; supply 100,000.");
+  } finally { provider.destroy(); await connection.close(); }
+});
+
+test("checkpoint step 3: invalid transfers and ERC-20 authorization", async (t) => {
+  const artifact = compileFactory();
+  const connection = await network.connect();
+  const provider = new BrowserProvider(connection.provider, undefined, { cacheTimeout: -1 });
+  try {
+    const alice = await provider.getSigner(0);
+    const bob = await provider.getSigner(1);
+    const carol = await provider.getSigner(2);
+    const factory = await new ContractFactory(artifact.abi, artifact.evm.bytecode.object, alice).deploy();
+    await factory.waitForDeployment();
+    const coffee = {
+      ...sample, tokenName: "Duong Coffee Token", tokenSymbol: "DCOF",
+      initialSupply: "100000", assetId: "coffee-001", assetName: "Duong Coffee",
+      assetType: "Business", valuation: "500000"
+    };
+    await (await factory.createAssetToken(...creationArgs(coffee))).wait();
+    // Use the compiler ABI here so ethers can decode OpenZeppelin custom errors.
+    const token = new Contract(await factory.tokenByAssetId(coffee.assetId), tokenArtifact.abi, alice);
+    const decimals = await token.decimals();
+    const units = (amount) => parseUnits(amount, decimals);
+    await (await token.transfer(bob.address, units("10000"))).wait();
+    await (await token.connect(bob).transfer(carol.address, units("2500"))).wait();
+
+    async function state() {
+      const [aliceBalance, bobBalance, carolBalance, supply, allowance] = await Promise.all([
+        token.balanceOf(alice.address), token.balanceOf(bob.address), token.balanceOf(carol.address),
+        token.totalSupply(), token.allowance(bob.address, carol.address)
+      ]);
+      return { aliceBalance, bobBalance, carolBalance, supply, allowance };
+    }
+    const baseline = {
+      aliceBalance: units("90000"), bobBalance: units("7500"), carolBalance: units("2500"),
+      supply: units("100000"), allowance: 0n
+    };
+    assert.deepEqual(await state(), baseline);
+
+    function expectedRevert(name, args) {
+      return (error) => {
+        assert.equal(error.code, "CALL_EXCEPTION", "must be a contract revert, not an RPC failure");
+        assert.equal(error.revert?.name, name);
+        assert.deepEqual(Array.from(error.revert.args), args);
+        return true;
+      };
+    }
+
+    await t.test("Bob cannot transfer 10,000 when he owns 7,500", async () => {
+      await assert.rejects(
+        token.connect(bob).transfer.staticCall(carol.address, units("10000")),
+        expectedRevert("ERC20InsufficientBalance", [bob.address, units("7500"), units("10000")])
+      );
+      assert.deepEqual(await state(), baseline, "rejected transfer must leave balances, supply, and allowance unchanged");
+      console.log("Step 3: Bob's 10,000 DCOF transfer reverted (balance 7,500); token state unchanged.");
+    });
+
+    await t.test("Carol cannot take 5,000 from Bob without allowance", async () => {
+      await assert.rejects(
+        token.connect(carol).transferFrom.staticCall(bob.address, carol.address, units("5000")),
+        expectedRevert("ERC20InsufficientAllowance", [carol.address, 0n, units("5000")])
+      );
+      assert.deepEqual(await state(), baseline, "unauthorized transfer must leave balances, supply, and allowance unchanged");
+      console.log("Step 3: Carol's unauthorized transferFrom reverted (allowance 0); token state unchanged.");
+    });
+
+    await t.test("Bob's approval lets Carol transfer only the approved 1,000", async () => {
+      await (await token.connect(bob).approve(carol.address, units("1000"))).wait();
+      assert.deepEqual(await state(), { ...baseline, allowance: units("1000") });
+      // Approval does not authorize a larger transfer, even though Bob has enough tokens.
+      await assert.rejects(
+        token.connect(carol).transferFrom.staticCall(bob.address, carol.address, units("5000")),
+        expectedRevert("ERC20InsufficientAllowance", [carol.address, units("1000"), units("5000")])
+      );
+      assert.deepEqual(await state(), { ...baseline, allowance: units("1000") });
+      await (await token.connect(carol).transferFrom(bob.address, carol.address, units("1000"))).wait();
+      const authorized = { ...baseline, bobBalance: units("6500"), carolBalance: units("3500") };
+      assert.deepEqual(await state(), authorized, "transfer must consume the allowance and preserve total supply");
+      await assert.rejects(
+        token.connect(carol).transferFrom.staticCall(bob.address, carol.address, units("1")),
+        expectedRevert("ERC20InsufficientAllowance", [carol.address, 0n, units("1")])
+      );
+      assert.deepEqual(await state(), authorized);
+      console.log("Step 3: approved 1,000 DCOF transfer succeeded; Bob 6,500, Carol 3,500, allowance 0, supply 100,000.");
+    });
   } finally { provider.destroy(); await connection.close(); }
 });
 

@@ -109,6 +109,39 @@ balance reader as the frontend:
 node --test --test-name-pattern="checkpoint step 2" test/contracts.test.js
 ```
 
+## Checkpoint 2, step 3: invalid transfers and authorization
+
+From `frontend`, run the security demonstration alone:
+
+```powershell
+node --test --test-name-pattern="checkpoint step 3" test/contracts.test.js
+```
+
+The test deploys a fresh coffee token and repeats the valid transfers, giving
+Alice 90,000, Bob 7,500, and Carol 2,500 DCOF. It then checks:
+
+1. Bob attempts to send Carol 10,000. The contract reverts with
+   `ERC20InsufficientBalance`, identifying Bob, his 7,500 balance, and the
+   requested 10,000. All three balances and total supply remain unchanged.
+2. Carol calls `transferFrom(bob, carol, 5000)` without Bob's approval. The
+   contract reverts with `ERC20InsufficientAllowance`, identifying Carol's zero
+   allowance and the requested 5,000. Balances, supply, and allowance stay unchanged.
+3. Bob approves Carol for 1,000. Approval changes allowance, without moving any
+   tokens. Carol still cannot transfer 5,000, but a confirmed transfer of 1,000
+   succeeds. Bob ends with 6,500, Carol with 3,500, and Alice with 90,000. The
+   allowance is consumed to zero; another attempt by Carol is rejected. Supply
+   stays at 100,000.
+
+The rejected calls use ethers `staticCall`: they execute the contract on the
+local chain as simulations, without submitting transactions or spending gas.
+The tests assert the precise decoded contract error and its arguments, so an RPC
+failure cannot accidentally count as a passing security test. Approval and the
+authorized transfer are actual confirmed transactions on that local chain.
+
+`transfer` sends the caller's own tokens. `transferFrom` sends another address's
+tokens and requires an allowance from that owner to the caller. These protections
+already exist in the inherited OpenZeppelin ERC-20; no Solidity changes are needed.
+
 ## Verification and GitHub CI
 
 ### Checkpoint 2, step 1: three wallets, one token
