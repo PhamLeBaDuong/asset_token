@@ -7,6 +7,10 @@ import { network } from "hardhat";
 import { BrowserProvider, Contract, ContractFactory, ZeroAddress, ZeroHash, formatUnits, parseUnits, id } from "ethers";
 import { creationArgs, createdEvent, readToken, checkMintRejection, findCreationBlock, factoryABI, tokenABI, transferArgs, readTransferHistory } from "../src/contracts.js";
 import { assetRecord } from "../src/asset-record.js";
+import { readLinkedToken } from "../src/contracts.js";
+import { fetchAssetRecord, assetRoute } from "../src/database-api.js";
+import { createApp } from "../../server/src/app.js";
+import { once } from "node:events";
 
 const require = createRequire(import.meta.url);
 const sample = {
@@ -303,6 +307,59 @@ test("checkpoint steps 4 and 5: Transfer logs and deployment-specific database e
       assert.throws(() => assetRecord(data, "", "{broken"), SyntaxError);
     });
   } finally { provider.destroy(); await connection.close(); }
+});
+
+test("checkpoint step 6: API asset record resolves its actual token on the blockchain", async () => {
+  const artifact = compileFactory();
+  const connection = await network.connect();
+  const provider = new BrowserProvider(connection.provider, undefined, { cacheTimeout: -1 });
+  let api;
+  try {
+    const alice = await provider.getSigner(0), bob = await provider.getSigner(1);
+    const factory = await new ContractFactory(artifact.abi, artifact.evm.bytecode.object, alice).deploy();
+    await factory.waitForDeployment();
+    const creation = await (await factory.createAssetToken(...creationArgs(sample))).wait();
+    const original = await readToken(provider, await factory.getAddress(), sample.assetId, creation, bob.address);
+    const stored = assetRecord(original, "Description from PostgreSQL", '{"business":"Coffee"}');
+    let queries = 0;
+    api = createApp({ query: async (sql, values) => {
+      queries++;
+      assert.match(sql, /FROM public.assets/);
+      assert.deepEqual(values, [sample.assetId, stored.chain_id]);
+      return { rows: [stored] };
+    } }, () => {});
+    api.listen(0, "127.0.0.1");
+    await once(api, "listening");
+    const record = await fetchAssetRecord(sample.assetId, stored.chain_id, (path) => fetch(`http://127.0.0.1:${api.address().port}${path}`));
+    const linked = await readLinkedToken(provider, record, bob.address);
+    assert.equal(queries, 1);
+    assert.equal(linked.address.toLowerCase(), stored.token_address);
+    assert.equal(linked.database.description, "Description from PostgreSQL");
+    assert.equal(linked.connectedBalance, 0n);
+    const token = new Contract(linked.address, tokenABI, alice);
+    const transfer = await (await token.transfer(...transferArgs(bob.address, "25", linked.decimals))).wait();
+    const refreshed = await readLinkedToken(provider, record, bob.address, transfer.blockNumber);
+    assert.equal(refreshed.connectedBalance, parseUnits("25", linked.decimals));
+    assert.equal(refreshed.database.token_address, stored.token_address);
+    await assert.rejects(readLinkedToken(provider, { ...record, chain_id: "999999" }, bob.address), /Wrong network/);
+    await assert.rejects(readLinkedToken(provider, { ...record, token_address: bob.address }, bob.address), /Database token address/);
+    await assert.rejects(readLinkedToken(provider, { ...record, issuer_address: bob.address }, bob.address), /deployment details/);
+    await assert.rejects(readLinkedToken(provider, { ...record, creation_block: "0" }, bob.address), /deployment details/);
+    await assert.rejects(readLinkedToken(provider, { ...record, creation_transaction_hash: ZeroHash }, bob.address), /deployment details/);
+  } finally {
+    if (api) await new Promise((resolve) => api.close(resolve));
+    provider.destroy();
+    await connection.close();
+  }
+});
+
+test("database routes and API failures preserve asset identifiers and useful errors", async () => {
+  assert.deepEqual(assetRoute({ pathname: "/assets/coffee-001", search: "?chainId=11155111" }), { assetId: "coffee-001", chainId: "11155111" });
+  assert.equal(assetRoute({ pathname: "/assets/coffee%2F001", search: "" }).assetId, "coffee/001");
+  assert.equal(assetRoute({ pathname: "/", search: "" }), null);
+  assert.equal(assetRoute({ pathname: "/assets/%ZZ", search: "" }), null);
+  await assert.rejects(fetchAssetRecord("coffee-001", "1", async () => ({ ok: false, json: async () => ({ error: "Import this asset first" }) })), /Import/);
+  await assert.rejects(fetchAssetRecord("coffee-001", "1", async () => ({ json: async () => { throw new Error("HTML response"); } })), /Start the API/);
 });
 
 test("transfer input preserves fractional precision and validates recipient and amount", () => {

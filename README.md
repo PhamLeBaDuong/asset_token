@@ -10,6 +10,8 @@ npm run dev
 ```
 
 Deploy the factory first, then enter its address and chain ID in the frontend.
+For saved asset lookup through PostgreSQL, start the API using
+[server/README.md](server/README.md), then click **Load saved asset** in the frontend.
 Run `npm test` for local blockchain checks and `npm run build` for a production
 build. GitHub Actions runs both checks on pushes and pull requests.
 

@@ -168,6 +168,29 @@ hashing and metadata verification are steps 7 and 8.
 node --test --test-name-pattern="checkpoint steps 4 and 5" test/contracts.test.js
 ```
 
+## Checkpoint 2, step 6: link database records to tokens
+
+Start the Node API following [server/README.md](../server/README.md), then start
+this frontend. Connect your wallet, enter your asset ID and expected chain ID,
+and press **Load saved asset**. The API reads its PostgreSQL record, including
+the token and factory addresses. The frontend checks those deployment details
+against the connected blockchain and displays the saved description/metadata
+with live supply, balances, and transfer events. You do not need to enter the
+factory address manually for database lookups.
+
+The URL becomes `/assets/<asset-id>?chainId=<chain-id>` and can be reopened.
+Connect the wallet to load it. **Look up / refresh token** retains the original
+direct factory lookup for tokens you have not yet imported into PostgreSQL.
+Transfers remain signed by the browser wallet and refresh their token balances.
+
+Database API reads do not save edits; downloading and importing remains the
+save flow. This step validates the deployment link. Document hashing and
+metadata integrity verification remain steps 7 and 8.
+
+```powershell
+node --test --test-name-pattern="checkpoint step 6" test/contracts.test.js
+```
+
 ## Verification and GitHub CI
 
 ### Checkpoint 2, step 1: three wallets, one token

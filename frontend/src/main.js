@@ -1,11 +1,17 @@
 import { BrowserProvider, Contract, ZeroAddress, formatUnits, getAddress } from "ethers";
-import { factoryABI, tokenABI, creationArgs, createdEvent, readToken, checkMintRejection, transferArgs, readTransferHistory } from "./contracts.js";
+import { factoryABI, tokenABI, creationArgs, createdEvent, readToken, readLinkedToken, checkMintRejection, transferArgs, readTransferHistory } from "./contracts.js";
 import { assetRecord } from "./asset-record.js";
+import { fetchAssetRecord, assetRoute } from "./database-api.js";
 import "./style.css";
 
 const $ = (id) => document.getElementById(id);
 $("factory").value = import.meta.env.VITE_FACTORY_ADDRESS || "";
 $("chain").value = import.meta.env.VITE_CHAIN_ID || "11155111";
+const initialRoute = assetRoute(window.location);
+if (initialRoute) {
+  $("lookup-id").value = initialRoute.assetId;
+  if (initialRoute.chainId) $("chain").value = initialRoute.chainId;
+}
 let provider, signer, current, busy = false, generation = 0;
 let history;
 
@@ -17,6 +23,7 @@ function reset() {
   clearHistory();
   $("database-form").hidden = true;
   $("database-status").textContent = "Look up an asset to prepare its database record.";
+  $("database-details").replaceChildren();
   $("mint-result").textContent = "Connection changed. Reconnect and look up the asset before running the simulation.";
   $("wallet").textContent = "Connection changed. Connect your wallet again.";
 }
@@ -25,13 +32,13 @@ window.ethereum?.on?.("chainChanged", reset);
 $("factory").addEventListener("input", reset);
 $("chain").addEventListener("input", reset);
 
-async function context() {
+async function context(factoryAddress) {
   const startedAt = generation;
   if (!provider || !signer) throw new Error("Connect your wallet first.");
   if (!/^\d+$/.test($("chain").value) || BigInt($("chain").value) <= 0n) throw new Error("Enter a valid chain ID.");
   const chainId = BigInt(await window.ethereum.request({ method: "eth_chainId" }));
   if (chainId !== BigInt($("chain").value)) throw new Error("Wrong network. Switch your wallet to the expected chain ID.");
-  const factory = getAddress($("factory").value.trim());
+  const factory = getAddress(factoryAddress || $("factory").value.trim());
   if (await provider.getCode(factory) === "0x") throw new Error("No factory contract found on this network at that address.");
   if (startedAt !== generation) throw new Error("Connection changed. Reconnect and retry.");
   return { provider, signer, factory, generation };
@@ -106,6 +113,10 @@ function show(data) {
     $("asset-description").value = "";
     $("asset-metadata").value = "{}";
   }
+  if (data.database && current?.database !== data.database) {
+    $("asset-description").value = data.database.description;
+    $("asset-metadata").value = JSON.stringify(data.database.metadata, null, 2);
+  }
   current = data;
   $("mint-result").textContent = "Asset loaded. You can now check extra mint rejection. No wallet popup is expected.";
   const amount = (value) => `${formatUnits(value, data.decimals)} ${data.symbol}`;
@@ -132,6 +143,48 @@ function show(data) {
   $("transfer-form").hidden = false;
   $("database-form").hidden = false;
   $("database-status").textContent = "The download will include this token's address, issuer, chain ID, and your off-chain fields.";
+  $("database-details").replaceChildren();
+  if (data.database) {
+    for (const [label, value] of Object.entries({
+      "Database asset": data.database.asset_id,
+      "Saved description": data.database.description,
+      "Saved metadata": JSON.stringify(data.database.metadata, null, 2)
+    })) {
+      const dt = document.createElement("dt"), dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = value;
+      $("database-details").append(dt, dd);
+    }
+    $("database-status").textContent = "Asset loaded from PostgreSQL. Token details and balances read from its linked blockchain contract.";
+  }
+}
+
+async function loadDatabaseAsset(assetId, updateRoute = true) {
+  if (!provider || !signer) throw new Error("Connect your wallet first.");
+  const startedAt = generation;
+  current = undefined;
+  clearTransfer();
+  clearHistory();
+  $("result").replaceChildren();
+  $("database-details").replaceChildren();
+  $("database-form").hidden = true;
+  $("database-status").textContent = "Loading the saved asset from PostgreSQL...";
+  try {
+    const record = await fetchAssetRecord(assetId, $("chain").value);
+    if (startedAt !== generation) throw new Error("Connection changed. Reconnect and retry.");
+    const ctx = await context(record.factory_address);
+    const data = await readLinkedToken(ctx.provider, record, await ctx.signer.getAddress());
+    if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
+    $("factory").value = data.factoryAddress;
+    $("lookup-id").value = record.asset_id;
+    show(data);
+    if (updateRoute) window.history.pushState({}, "", `/assets/${encodeURIComponent(record.asset_id)}?chainId=${record.chain_id}`);
+    await loadHistory(ctx, data);
+    $("status").textContent = "Database asset loaded; balances and transfer history read from its token contract.";
+  } catch (error) {
+    if (startedAt === generation) $("database-status").textContent = `Database lookup failed: ${error.shortMessage || error.message}`;
+    throw error;
+  }
 }
 
 $("connect").onclick = () => run(async () => {
@@ -142,6 +195,8 @@ $("connect").onclick = () => run(async () => {
   const network = await provider.getNetwork();
   $("wallet").textContent = `Connected wallet: ${await signer.getAddress()} · Chain ${network.chainId}`;
   $("status").textContent = "Wallet connected. Verify the factory address and expected chain before creating.";
+  const route = assetRoute(window.location);
+  if (route) await loadDatabaseAsset(route.assetId, false);
 });
 
 $("create-form").onsubmit = (event) => {
@@ -178,11 +233,13 @@ $("lookup-form").onsubmit = (event) => {
     clearTransfer();
     clearHistory();
     $("database-form").hidden = true;
+    $("database-details").replaceChildren();
     $("mint-result").textContent = "Loading asset. Wait for lookup to finish before running the simulation.";
     $("result").replaceChildren();
     const data = await readToken(ctx.provider, ctx.factory, $("lookup-id").value.trim(), undefined, await ctx.signer.getAddress());
     if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
     show(data);
+    window.history.replaceState({}, "", "/");
     await loadHistory(ctx, data);
     $("status").textContent = "Token details and balances retrieved from the blockchain.";
   });
@@ -243,7 +300,9 @@ $("transfer-form").onsubmit = (event) => {
     try {
       // A transfer receipt is not a factory creation receipt. Use its block only
       // to ensure reads include the confirmed transfer, even with RPC caching.
-      const data = await readToken(ctx.provider, ctx.factory, asset.asset.assetId, undefined, wallet, receipt.blockNumber);
+      const data = asset.database
+        ? await readLinkedToken(ctx.provider, asset.database, wallet, receipt.blockNumber)
+        : await readToken(ctx.provider, ctx.factory, asset.asset.assetId, undefined, wallet, receipt.blockNumber);
       if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and look up the asset.");
       show(data);
       $("transfer-amount").value = "";
@@ -292,3 +351,16 @@ $("database-form").onsubmit = (event) => {
     $("status").textContent = $("database-status").textContent;
   });
 };
+
+$("lookup-db").onclick = () => run(() => loadDatabaseAsset($("lookup-id").value.trim()));
+window.addEventListener("popstate", () => {
+  const route = assetRoute(window.location);
+  if (route) {
+    $("lookup-id").value = route.assetId;
+    if (route.chainId && route.chainId !== $("chain").value) {
+      $("chain").value = route.chainId;
+      reset();
+    }
+    if (provider && signer) run(() => loadDatabaseAsset(route.assetId, false));
+  }
+});

@@ -104,4 +104,5 @@ database credentials in frontend `VITE_*` variables. This step does not use JWT.
 
 The record stores the existing on-chain `document_hash`; it does not hash or
 verify the exported document. Hashing and integrity verification come in steps
-7 and 8. The frontend-to-database API link comes in step 6.
+7 and 8. The frontend-to-database API link is implemented in
+[server](../server/README.md) for step 6.

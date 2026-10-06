@@ -84,12 +84,15 @@ export async function findCreationBlock(provider, timestamp, latestBlock) {
   return block;
 }
 
-export async function readToken(provider, factoryAddress, assetId, receipt, walletAddress, minimumBlock = 0) {
+export async function readToken(provider, factoryAddress, assetId, receipt, walletAddress, minimumBlock = 0, expectedTokenAddress) {
   const factory = new Contract(factoryAddress, factoryABI, provider);
   const blockTag = Math.max(await provider.getBlockNumber(), receipt?.blockNumber ?? 0, minimumBlock);
   const at = { blockTag };
   const address = await factory.tokenByAssetId(assetId, at);
   if (address === ZeroAddress) throw new Error("No token is registered for this asset ID.");
+  if (expectedTokenAddress && getAddress(address) !== getAddress(expectedTokenAddress)) {
+    throw new Error("Database token address does not match the factory's registered token.");
+  }
   const token = new Contract(address, tokenABI, provider);
   const asset = await token.asset(at);
   // The issuer is recorded in the factory event, not a token.issuer() getter.
@@ -116,6 +119,18 @@ export async function readToken(provider, factoryAddress, assetId, receipt, wall
   return { address, factoryAddress: getAddress(factoryAddress), issuer, name, symbol, decimals, supply, balance, factoryBalance, connectedWallet, connectedBalance,
     asset, chainId: network.chainId, readBlock: blockTag, creationBlock: creation.blockNumber,
     transactionHash: creation.transactionHash, blockHash: block.hash };
+}
+
+export async function readLinkedToken(provider, record, walletAddress, minimumBlock = 0) {
+  const network = await provider.getNetwork();
+  if (BigInt(record.chain_id) !== network.chainId) throw new Error(`Wrong network. This database asset is on chain ${record.chain_id}.`);
+  const data = await readToken(provider, record.factory_address, record.asset_id, undefined, walletAddress, minimumBlock, record.token_address);
+  if (getAddress(record.issuer_address) !== data.issuer ||
+      record.creation_transaction_hash.toLowerCase() !== data.transactionHash.toLowerCase() ||
+      BigInt(record.creation_block) !== BigInt(data.creationBlock)) {
+    throw new Error("Database deployment details do not match the token's factory creation event.");
+  }
+  return { ...data, database: record };
 }
 
 export async function readTransferHistory(provider, tokenAddress, creationBlock, toBlock, blockSpan = 1000) {

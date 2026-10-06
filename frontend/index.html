@@ -38,7 +38,8 @@
       </section>
       <section aria-labelledby="lookup-title">
         <h2 id="lookup-title">3. Read from the blockchain</h2>
-        <form id="lookup-form"><label>Asset ID<input id="lookup-id" required placeholder="PROPERTY-001" /></label><button type="submit">Look up / refresh token</button></form>
+        <form id="lookup-form"><label>Asset ID<input id="lookup-id" required placeholder="PROPERTY-001" /></label><button type="submit">Look up / refresh token</button> <button id="lookup-db" type="button">Load saved asset</button></form>
+        <p class="hint">Load saved asset retrieves its description and metadata from PostgreSQL, then reads balances and transfers from its token contract.</p>
         <dl id="result"></dl>
         <button id="mint-check" type="button">Check extra mint rejection (simulation)</button>
         <p id="mint-result" role="status" aria-live="polite">Look up an asset first, then run the simulation. No wallet popup is expected.</p>
@@ -69,6 +70,7 @@
       </section>
       <section aria-labelledby="database-title">
         <h2 id="database-title">6. Asset description and metadata</h2>
+        <dl id="database-details"></dl>
         <form id="database-form" hidden>
           <label>Description<textarea id="asset-description" rows="3" placeholder="Business information about this asset"></textarea></label>
           <label>Additional metadata (JSON object)<textarea id="asset-metadata" rows="4">{}</textarea></label>
