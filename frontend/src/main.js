@@ -11,7 +11,7 @@ function reset() {
   generation++;
   provider = signer = current = undefined;
   $("result").replaceChildren();
-  $("mint-check").disabled = true;
+  $("mint-result").textContent = "Connection changed. Reconnect and look up the asset before running the simulation.";
   $("wallet").textContent = "Connection changed. Connect your wallet again.";
 }
 window.ethereum?.on?.("accountsChanged", reset);
@@ -35,16 +35,16 @@ async function run(action) {
   document.querySelectorAll("button").forEach((button) => button.disabled = true);
   $("status").textContent = "Working…";
   try { await action(); }
-  catch (error) { $("status").textContent = error.reason || error.shortMessage || error.message; }
+  catch (error) { $("status").textContent = error.reason || error.info?.error?.message || error.error?.message || error.shortMessage || error.message; }
   finally {
     busy = false;
     document.querySelectorAll("button").forEach((button) => button.disabled = false);
-    $("mint-check").disabled = !current;
   }
 }
 
 function show(data) {
   current = data;
+  $("mint-result").textContent = "Asset loaded. You can now check extra mint rejection. No wallet popup is expected.";
   const amount = (value) => `${formatUnits(value, data.decimals)} ${data.symbol}`;
   const rows = {
     "Token contract": data.address, "Issuer": data.issuer, "Token": `${data.name} (${data.symbol})`,
@@ -91,7 +91,7 @@ $("create-form").onsubmit = (event) => {
     $("lookup-id").value = args[3];
     $("status").textContent = `Created ${creation.args.tokenAddress}. Transaction: ${receipt.hash}`;
     try {
-      const data = await readToken(ctx.provider, ctx.factory, args[3]);
+      const data = await readToken(ctx.provider, ctx.factory, args[3], receipt);
       if (ctx.generation === generation) show(data);
     } catch (error) {
       throw new Error(`Creation succeeded: ${creation.args.tokenAddress}. Transaction: ${receipt.hash}. Reading details failed: ${error.shortMessage || error.message}. Use lookup to retry.`);
@@ -104,6 +104,7 @@ $("lookup-form").onsubmit = (event) => {
   run(async () => {
     const ctx = await context();
     current = undefined;
+    $("mint-result").textContent = "Loading asset. Wait for lookup to finish before running the simulation.";
     $("result").replaceChildren();
     const data = await readToken(ctx.provider, ctx.factory, $("lookup-id").value.trim());
     if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
@@ -113,10 +114,23 @@ $("lookup-form").onsubmit = (event) => {
 };
 
 $("mint-check").onclick = () => run(async () => {
-  const ctx = await context();
-  const rejected = await checkMintRejection(ctx.provider, current.address, await ctx.signer.getAddress());
-  if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
-  $("status").textContent = rejected
-    ? "Extra mint call reverted in blockchain simulation. The supplied token contract has no public mint function; its initial supply is fixed."
-    : "The simulated mint call did not revert. This token may not match the supplied fixed-supply contract; no transaction was sent.";
+  const startedAt = generation;
+  $("mint-result").textContent = "Checking extra mint rejection with your wallet's RPC. No wallet approval is needed...";
+  try {
+    if (!current) throw new Error("Connect your wallet and successfully look up an asset first, then press this button again.");
+    const tokenAddress = current.address;
+    const ctx = await context();
+    const rejected = await checkMintRejection(ctx.provider, tokenAddress, await ctx.signer.getAddress());
+    if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
+    const message = rejected
+      ? "Expected result: extra mint call rejected. The supplied contract has no public mint function. No tokens were minted and no gas was spent."
+      : "Unexpected result: the extra mint call did not revert. This token may not match the supplied fixed-supply contract. No transaction was sent.";
+    $("mint-result").textContent = message;
+    $("status").textContent = message;
+  } catch (error) {
+    if (startedAt === generation) {
+      $("mint-result").textContent = `Simulation could not complete: ${error.reason || error.info?.error?.message || error.error?.message || error.shortMessage || error.message}`;
+    }
+    throw error;
+  }
 });

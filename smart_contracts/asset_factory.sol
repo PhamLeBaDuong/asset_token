@@ -15,7 +15,7 @@ contract AssetTokenFactory {
 
     mapping(string => address) public tokenByAssetId;
 
-    event AssetTokenCreated(
+    event AssetTokenCreated (
         string assetId,
         address indexed tokenAddress,
         address indexed issuer

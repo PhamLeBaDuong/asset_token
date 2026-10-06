@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import solc from "solc";
 import { network } from "hardhat";
 import { BrowserProvider, Contract, ContractFactory, ZeroAddress, ZeroHash, id } from "ethers";
-import { creationArgs, createdEvent, readToken, checkMintRejection, factoryABI, tokenABI } from "../src/contracts.js";
+import { creationArgs, createdEvent, readToken, checkMintRejection, findCreationBlock, factoryABI, tokenABI } from "../src/contracts.js";
 
 const require = createRequire(import.meta.url);
 const sample = {
@@ -38,7 +38,19 @@ test("factory creation, chain reads, duplicate rejection, and fixed supply", asy
   } }));
   assert.deepEqual((output.errors || []).filter((error) => error.severity === "error"), []);
   const connection = await network.connect();
-  const provider = new BrowserProvider(connection.provider, undefined, { cacheTimeout: -1 });
+  let logRequests = 0;
+  const limitedRPC = {
+    request: async (request) => {
+      if (request.method === "eth_getLogs") {
+        logRequests++;
+        const filter = request.params[0];
+        // A stricter limit than the wallet in the bug report: only one block.
+        assert.equal(filter.fromBlock, filter.toBlock, "lookup must not scan chain history");
+      }
+      return connection.provider.request(request);
+    }
+  };
+  const provider = new BrowserProvider(limitedRPC, undefined, { cacheTimeout: -1 });
   try {
     const issuer = await provider.getSigner(0), outsider = await provider.getSigner(1);
     const artifact = output.contracts["asset_factory.sol"].AssetTokenFactory;
@@ -51,7 +63,11 @@ test("factory creation, chain reads, duplicate rejection, and fixed supply", asy
     assert.equal(event.args.issuer, issuer.address);
     assert.notEqual(event.args.tokenAddress, ZeroAddress);
     assert.notEqual(await provider.getCode(event.args.tokenAddress), "0x");
+    const immediate = await readToken(provider, address, sample.assetId, receipt);
+    assert.equal(immediate.transactionHash, receipt.hash);
+    assert.equal(logRequests, 0, "creation should use receipt without requesting logs");
     const data = await readToken(provider, address, sample.assetId);
+    assert.equal(logRequests, 1, "lookup should query only the creation block");
     assert.equal(data.address, event.args.tokenAddress);
     assert.equal(data.issuer, issuer.address);
     assert.equal(data.supply, 1000n * 10n ** 18n);
@@ -88,6 +104,22 @@ test("factory creation, chain reads, duplicate rejection, and fixed supply", asy
     assert.equal(second.balance, 25n * 10n ** 18n);
     assert.equal(await token.totalSupply(), data.supply);
   } finally { provider.destroy(); await connection.close(); }
+});
+
+test("creation block lookup handles a long chain and old tokens without scanning", async () => {
+  const latest = 11752908;
+  for (const target of [0, 1, 42000, latest - 1, latest]) {
+    let reads = 0;
+    const provider = { getBlock: async (number) => {
+      reads++;
+      return { number, timestamp: 1600000000 + number * 12 };
+    } };
+    const block = await findCreationBlock(provider, BigInt(1600000000 + target * 12), latest);
+    assert.equal(block.number, target);
+    assert.ok(reads <= 25, `too many block requests: ${reads}`);
+  }
+  await assert.rejects(findCreationBlock({ getBlock: async () => null }, 1n, latest), /unavailable/);
+  await assert.rejects(findCreationBlock({ getBlock: async (number) => ({ number, timestamp: number * 12 }) }, 13n, 10), /unavailable/);
 });
 
 test("mint check does not mistake RPC failure for contract rejection", async () => {

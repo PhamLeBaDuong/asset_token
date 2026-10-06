@@ -50,22 +50,51 @@ export function createdEvent(receipt, factoryAddress) {
   throw new Error("Transaction confirmed, but no factory creation event was found.");
 }
 
-export async function readToken(provider, factoryAddress, assetId) {
+// AssetToken stores its creation timestamp. Locate that block using block
+// headers, then request logs for just that block instead of scanning history.
+export async function findCreationBlock(provider, timestamp, latestBlock) {
+  let low = 0, high = latestBlock;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const block = await provider.getBlock(middle);
+    if (!block) throw new Error(`Block ${middle} unavailable. Retry the lookup.`);
+    if (BigInt(block.timestamp) < timestamp) low = middle + 1;
+    else high = middle;
+  }
+  const block = await provider.getBlock(low);
+  if (!block || BigInt(block.timestamp) !== timestamp) {
+    throw new Error("The token creation block is unavailable. Check the network and retry.");
+  }
+  return block;
+}
+
+export async function readToken(provider, factoryAddress, assetId, receipt) {
   const factory = new Contract(factoryAddress, factoryABI, provider);
-  const address = await factory.tokenByAssetId(assetId);
-  if (address === ZeroAddress) throw new Error("No token is registered for this asset ID.");
-  // The issuer is recorded in the factory event, not a token.issuer() getter.
-  const events = await factory.queryFilter(factory.filters.AssetTokenCreated(null, address), 0, "latest");
-  const creation = events.find((event) => event.args.assetId === assetId);
-  if (!creation) throw new Error("Creation event unavailable. Check whether your RPC allows historical log queries.");
-  const issuer = creation.args.issuer;
-  const token = new Contract(address, tokenABI, provider);
-  const blockTag = await provider.getBlockNumber();
+  const blockTag = Math.max(await provider.getBlockNumber(), receipt?.blockNumber ?? 0);
   const at = { blockTag };
-  const [name, symbol, decimals, supply, balance, factoryBalance, asset, network, block] = await Promise.all([
+  const address = await factory.tokenByAssetId(assetId, at);
+  if (address === ZeroAddress) throw new Error("No token is registered for this asset ID.");
+  const token = new Contract(address, tokenABI, provider);
+  const asset = await token.asset(at);
+  // The issuer is recorded in the factory event, not a token.issuer() getter.
+  let creation, block;
+  if (receipt) {
+    const parsed = createdEvent(receipt, factoryAddress);
+    creation = { args: parsed.event.args, blockNumber: receipt.blockNumber, transactionHash: receipt.hash };
+    block = await provider.getBlock(receipt.blockNumber);
+  } else {
+    block = await findCreationBlock(provider, asset.tokenizedAt, blockTag);
+    const events = await factory.queryFilter(factory.filters.AssetTokenCreated(null, address), block.number, block.number);
+    creation = events.find((event) => event.args.assetId === assetId);
+  }
+  if (!creation || creation.args.assetId !== assetId || getAddress(creation.args.tokenAddress) !== getAddress(address)) {
+    throw new Error("No matching creation event found for this asset. Check the factory address and network.");
+  }
+  if (!block) throw new Error("Creation block unavailable. Retry the lookup.");
+  const issuer = creation.args.issuer;
+  const [name, symbol, decimals, supply, balance, factoryBalance, network] = await Promise.all([
     token.name(at), token.symbol(at), token.decimals(at), token.totalSupply(at),
-    token.balanceOf(issuer, at), token.balanceOf(factoryAddress, at), token.asset(at),
-    provider.getNetwork(), provider.getBlock(creation.blockNumber)
+    token.balanceOf(issuer, at), token.balanceOf(factoryAddress, at), provider.getNetwork()
   ]);
   return { address, issuer, name, symbol, decimals, supply, balance, factoryBalance,
     asset, chainId: network.chainId, readBlock: blockTag, creationBlock: creation.blockNumber,
@@ -78,7 +107,6 @@ export async function checkMintRejection(provider, tokenAddress, caller) {
     await provider.call({ to: tokenAddress, from: caller,
       data: mintInterface.encodeFunctionData("mint", [caller, 1n]) });
   } catch (error) {
-    // A dropped connection or wallet error is not evidence of a contract rejection.
     if (error.code === "CALL_EXCEPTION") return true;
     throw error;
   }

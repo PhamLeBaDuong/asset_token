@@ -35,10 +35,11 @@ then reads metadata, total supply, and balances through the wallet's RPC.
 It shows chain ID, transaction hash, creation block/hash, and the block used for
 balance reads. Lookup by asset ID also works after reloading the page.
 
-Historical lookup queries the factory's creation events starting at block zero.
-Some public RPCs limit log ranges; use a provider allowing historical queries for
-this minimal demo. A larger app should query paginated ranges from the factory's
-deployment block or maintain an event index. Metadata URIs are stored as text;
+After creation, the app uses the transaction receipt directly. On later lookups,
+it reads the token's stored creation timestamp and uses binary search over block
+headers to locate the creation block. It queries events for that single block,
+avoiding the wallet RPC's event-history range limit. This assumes strictly
+increasing block timestamps, as on Ethereum Sepolia. Metadata URIs are stored as text;
 the app does not upload or fetch documents. Valuation is a whole-number amount in
 the currency you enter, without currency conversion. Asset IDs are case-sensitive.
 
