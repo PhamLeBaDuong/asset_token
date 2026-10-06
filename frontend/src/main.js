@@ -1,5 +1,5 @@
 import { BrowserProvider, Contract, formatUnits, getAddress } from "ethers";
-import { factoryABI, creationArgs, createdEvent, readToken, checkMintRejection } from "./contracts.js";
+import { factoryABI, tokenABI, creationArgs, createdEvent, readToken, checkMintRejection, transferArgs } from "./contracts.js";
 import "./style.css";
 
 const $ = (id) => document.getElementById(id);
@@ -11,6 +11,7 @@ function reset() {
   generation++;
   provider = signer = current = undefined;
   $("result").replaceChildren();
+  clearTransfer();
   $("mint-result").textContent = "Connection changed. Reconnect and look up the asset before running the simulation.";
   $("wallet").textContent = "Connection changed. Connect your wallet again.";
 }
@@ -20,13 +21,21 @@ $("factory").addEventListener("input", reset);
 $("chain").addEventListener("input", reset);
 
 async function context() {
+  const startedAt = generation;
   if (!provider || !signer) throw new Error("Connect your wallet first.");
   if (!/^\d+$/.test($("chain").value) || BigInt($("chain").value) <= 0n) throw new Error("Enter a valid chain ID.");
   const chainId = BigInt(await window.ethereum.request({ method: "eth_chainId" }));
   if (chainId !== BigInt($("chain").value)) throw new Error("Wrong network. Switch your wallet to the expected chain ID.");
   const factory = getAddress($("factory").value.trim());
   if (await provider.getCode(factory) === "0x") throw new Error("No factory contract found on this network at that address.");
+  if (startedAt !== generation) throw new Error("Connection changed. Reconnect and retry.");
   return { provider, signer, factory, generation };
+}
+
+function clearTransfer() {
+  $("transfer-form").hidden = true;
+  $("transfer-summary").textContent = "Connect your wallet and look up an asset to transfer its tokens.";
+  $("transfer-result").textContent = "";
 }
 
 async function run(action) {
@@ -52,6 +61,7 @@ function show(data) {
     "Creation block": data.creationBlock, "Creation block hash": data.blockHash,
     "Balances read at block": data.readBlock, "Total supply": amount(data.supply),
     "Issuer balance": amount(data.balance), "Factory balance": amount(data.factoryBalance),
+    "Connected wallet": data.connectedWallet, "Your balance": amount(data.connectedBalance),
     "Asset ID": data.asset.assetId, "Asset name": data.asset.assetName,
     "Asset type": data.asset.assetType, "Valuation": `${data.asset.valuation} ${data.asset.currency}`,
     "Metadata URI": data.asset.metadataURI, "Document hash": data.asset.documentHash,
@@ -64,6 +74,8 @@ function show(data) {
     dd.textContent = String(value);
     $("result").append(dt, dd);
   }
+  $("transfer-summary").textContent = `Token: ${data.address} | Your balance: ${amount(data.connectedBalance)}`;
+  $("transfer-form").hidden = false;
 }
 
 $("connect").onclick = () => run(async () => {
@@ -72,7 +84,7 @@ $("connect").onclick = () => run(async () => {
   await provider.send("eth_requestAccounts", []);
   signer = await provider.getSigner();
   const network = await provider.getNetwork();
-  $("wallet").textContent = `Issuer wallet: ${await signer.getAddress()} · Chain ${network.chainId}`;
+  $("wallet").textContent = `Connected wallet: ${await signer.getAddress()} · Chain ${network.chainId}`;
   $("status").textContent = "Wallet connected. Verify the factory address and expected chain before creating.";
 });
 
@@ -91,7 +103,7 @@ $("create-form").onsubmit = (event) => {
     $("lookup-id").value = args[3];
     $("status").textContent = `Created ${creation.args.tokenAddress}. Transaction: ${receipt.hash}`;
     try {
-      const data = await readToken(ctx.provider, ctx.factory, args[3], receipt);
+      const data = await readToken(ctx.provider, ctx.factory, args[3], receipt, await ctx.signer.getAddress());
       if (ctx.generation === generation) show(data);
     } catch (error) {
       throw new Error(`Creation succeeded: ${creation.args.tokenAddress}. Transaction: ${receipt.hash}. Reading details failed: ${error.shortMessage || error.message}. Use lookup to retry.`);
@@ -104,9 +116,10 @@ $("lookup-form").onsubmit = (event) => {
   run(async () => {
     const ctx = await context();
     current = undefined;
+    clearTransfer();
     $("mint-result").textContent = "Loading asset. Wait for lookup to finish before running the simulation.";
     $("result").replaceChildren();
-    const data = await readToken(ctx.provider, ctx.factory, $("lookup-id").value.trim());
+    const data = await readToken(ctx.provider, ctx.factory, $("lookup-id").value.trim(), undefined, await ctx.signer.getAddress());
     if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
     show(data);
     $("status").textContent = "Token details and balances retrieved from the blockchain.";
@@ -134,3 +147,52 @@ $("mint-check").onclick = () => run(async () => {
     throw error;
   }
 });
+
+$("transfer-form").onsubmit = (event) => {
+  event.preventDefault();
+  run(async () => {
+    if (!current) throw new Error("Look up an asset before transferring.");
+    const asset = current;
+    const ctx = await context();
+    const args = transferArgs($("transfer-recipient").value, $("transfer-amount").value, asset.decimals);
+    const wallet = await ctx.signer.getAddress();
+    if (ctx.generation !== generation || current !== asset || wallet !== asset.connectedWallet) {
+      throw new Error("Connection changed. Reconnect and look up the asset again.");
+    }
+    const token = new Contract(asset.address, tokenABI, ctx.signer);
+    $("transfer-result").textContent = "Confirm the transfer in your wallet.";
+    $("status").textContent = "Confirm the transfer in your wallet.";
+    let receipt;
+    try {
+      const tx = await token.transfer(...args);
+      if (ctx.generation === generation) {
+        $("transfer-result").textContent = `Submitted: ${tx.hash}. Waiting for confirmation...`;
+        $("status").textContent = $("transfer-result").textContent;
+      }
+      receipt = await tx.wait();
+    } catch (error) {
+      if (ctx.generation === generation) $("transfer-result").textContent = `Transfer did not complete: ${error.reason || error.shortMessage || error.message}`;
+      throw error;
+    }
+    if (ctx.generation !== generation) {
+      throw new Error(`Transfer confirmed: ${receipt.hash}. Reconnect on its original network and look up the asset to refresh balances.`);
+    }
+    $("transfer-result").textContent = `Transfer confirmed. Transaction: ${receipt.hash}`;
+    try {
+      // A transfer receipt is not a factory creation receipt. Use its block only
+      // to ensure reads include the confirmed transfer, even with RPC caching.
+      const data = await readToken(ctx.provider, ctx.factory, asset.asset.assetId, undefined, wallet, receipt.blockNumber);
+      if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and look up the asset.");
+      show(data);
+      $("transfer-amount").value = "";
+      $("status").textContent = `Transfer confirmed: ${receipt.hash}. Balances refreshed from the blockchain.`;
+    } catch (error) {
+      if (ctx.generation === generation) {
+        current = undefined;
+        $("transfer-form").hidden = true;
+        $("transfer-summary").textContent = "Transfer confirmed. Look up the asset again to refresh balances.";
+      }
+      throw new Error(`Transfer confirmed: ${receipt.hash}. Balance refresh failed: ${error.shortMessage || error.message}. Use lookup to retry.`);
+    }
+  });
+};

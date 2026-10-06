@@ -1,4 +1,4 @@
-import { Contract, Interface, MaxUint256, ZeroAddress, ZeroHash, getAddress } from "ethers";
+import { Contract, Interface, MaxUint256, ZeroAddress, ZeroHash, getAddress, parseUnits } from "ethers";
 
 export const factoryABI = [
   "function createAssetToken(string tokenName,string tokenSymbol,uint256 initialSupply,string assetId,string assetName,string assetType,uint256 valuation,string currency,string metadataURI,bytes32 documentHash) returns (address)",
@@ -12,10 +12,25 @@ export const tokenABI = [
   "function decimals() view returns (uint8)",
   "function totalSupply() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
+  "function transfer(address to,uint256 amount) returns (bool)",
   "function hasRole(bytes32,address) view returns (bool)",
   "function asset() view returns (string assetId,string assetName,string assetType,uint256 valuation,string currency,string metadataURI,bytes32 documentHash,uint256 tokenizedAt,bool active)"
 ];
 export const mintInterface = new Interface(["function mint(address to,uint256 amount)"]);
+
+export function transferArgs(recipient, amount, decimals) {
+  const address = getAddress(recipient.trim());
+  if (address === ZeroAddress) throw new Error("Recipient cannot be the zero address.");
+  const value = amount.trim();
+  if (!/^\d+(\.\d+)?$/.test(value)) throw new Error("Enter a positive token amount, such as 10000 or 2.5.");
+  // Reject excess precision explicitly; never round a user's transfer amount.
+  if ((value.split(".")[1]?.length || 0) > Number(decimals)) {
+    throw new Error(`This token supports at most ${decimals} decimal places.`);
+  }
+  const units = parseUnits(value, decimals);
+  if (units <= 0n || units > MaxUint256) throw new Error("Transfer amount must be positive and fit within uint256.");
+  return [address, units];
+}
 
 function integer(value, label, max = MaxUint256) {
   if (!/^\d+$/.test(value)) throw new Error(`${label} must be a non-negative whole number.`);
@@ -68,9 +83,9 @@ export async function findCreationBlock(provider, timestamp, latestBlock) {
   return block;
 }
 
-export async function readToken(provider, factoryAddress, assetId, receipt) {
+export async function readToken(provider, factoryAddress, assetId, receipt, walletAddress, minimumBlock = 0) {
   const factory = new Contract(factoryAddress, factoryABI, provider);
-  const blockTag = Math.max(await provider.getBlockNumber(), receipt?.blockNumber ?? 0);
+  const blockTag = Math.max(await provider.getBlockNumber(), receipt?.blockNumber ?? 0, minimumBlock);
   const at = { blockTag };
   const address = await factory.tokenByAssetId(assetId, at);
   if (address === ZeroAddress) throw new Error("No token is registered for this asset ID.");
@@ -92,11 +107,12 @@ export async function readToken(provider, factoryAddress, assetId, receipt) {
   }
   if (!block) throw new Error("Creation block unavailable. Retry the lookup.");
   const issuer = creation.args.issuer;
-  const [name, symbol, decimals, supply, balance, factoryBalance, network] = await Promise.all([
+  const connectedWallet = walletAddress ? getAddress(walletAddress) : issuer;
+  const [name, symbol, decimals, supply, balance, factoryBalance, connectedBalance, network] = await Promise.all([
     token.name(at), token.symbol(at), token.decimals(at), token.totalSupply(at),
-    token.balanceOf(issuer, at), token.balanceOf(factoryAddress, at), provider.getNetwork()
+    token.balanceOf(issuer, at), token.balanceOf(factoryAddress, at), token.balanceOf(connectedWallet, at), provider.getNetwork()
   ]);
-  return { address, issuer, name, symbol, decimals, supply, balance, factoryBalance,
+  return { address, issuer, name, symbol, decimals, supply, balance, factoryBalance, connectedWallet, connectedBalance,
     asset, chainId: network.chainId, readBlock: blockTag, creationBlock: creation.blockNumber,
     transactionHash: creation.transactionHash, blockHash: block.hash };
 }

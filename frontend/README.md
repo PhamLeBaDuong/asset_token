@@ -70,7 +70,70 @@ The issuer displayed remains wallet A. Simulation spends no gas and does not
 submit a transaction. Supply and balances can be refreshed using lookup.
 The factory has zero tokens at creation; later transfers to it are possible.
 
+## Checkpoint 2, step 2: transfer UI
+
+After connecting and creating or looking up a token, the Transfer tokens section
+shows its contract address and your connected wallet's balance. Enter a recipient
+wallet address and an amount in tokens, then press Transfer. Your browser wallet
+signs `AssetToken.transfer(recipient, amount)` directly. No backend or private key
+input is involved. The app waits for confirmation, displays the transaction hash,
+and re-reads balances at a block that includes the confirmed transfer.
+
+Amounts may include fractions, such as `2.5`. The app uses `parseUnits` with the
+token's decimals and rejects excess precision rather than rounding. This differs
+from initial supply: the constructor scales supply, but `transfer` expects base
+units, so the frontend scales transfer amounts. Invalid addresses, the zero
+address, and non-positive amounts are rejected before a wallet prompt.
+
+For the browser demonstration on your chosen network:
+
+1. Connect Alice and create `coffee-001` with name Duong Coffee Token, symbol
+   DCOF, and initial supply `100000`. Complete the other asset fields as usual.
+2. Enter Bob's wallet address and `10000`, then approve the transfer. Alice's
+   refreshed balance should be 90,000 DCOF.
+3. Switch the wallet to Bob, reconnect, and look up `coffee-001` using the same
+   factory address and chain. Your balance should show 10,000 DCOF.
+4. Transfer `2500` to Carol. Bob's refreshed balance should be 7,500 DCOF.
+5. Switch to Carol, reconnect, and look up the asset. Your balance should show
+   2,500 DCOF. Total supply remains 100,000 throughout.
+
+Each sending wallet needs native test ETH for gas on Sepolia. Account or network
+changes clear the loaded asset, requiring reconnect and lookup. A declined wallet
+prompt or reverted transaction displays an error. If a confirmed transaction's
+balance refresh fails, its hash remains visible; retry using lookup.
+
+The local automated transfer check uses the same ABI, input conversion, and
+balance reader as the frontend:
+
+```powershell
+node --test --test-name-pattern="checkpoint step 2" test/contracts.test.js
+```
+
 ## Verification and GitHub CI
+
+### Checkpoint 2, step 1: three wallets, one token
+
+From `frontend`, run only this checkpoint step:
+
+```powershell
+node --test --test-name-pattern="checkpoint step 1" test/contracts.test.js
+```
+
+The test uses three distinct funded accounts on a temporary local Hardhat chain:
+account 0 is Alice (issuer), account 1 is Bob, and account 2 is Carol. Alice deploys
+the factory and creates `coffee-001`, named Duong Coffee Token (`DCOF`), with an
+initial supply of 100,000. The factory records Alice as issuer and returns the
+address of the new token. Each account then calls `balanceOf` on that same token.
+
+Expected balances: Alice = 100,000 DCOF, Bob = 0, Carol = 0. The test prints the
+token address, wallet addresses, and balances, and asserts those results. ERC-20
+stores balances in base units; this contract uses 18 decimals, so 100,000 tokens
+are stored as 100,000 times 10^18. The factory constructor arguments take the
+whole-token supply because the token constructor already performs that scaling.
+
+This local chain is discarded when the test finishes. These accounts are separate
+from your browser wallet and Sepolia deployment. This step verifies the initial
+ownership and shared contract; transfers come in step 2.
 
 ```powershell
 npm test
