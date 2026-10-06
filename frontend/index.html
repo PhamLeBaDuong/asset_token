@@ -55,6 +55,28 @@
         </form>
         <p id="transfer-result" role="status" aria-live="polite"></p>
       </section>
+      <section aria-labelledby="history-title">
+        <h2 id="history-title">5. Transaction history</h2>
+        <p id="history-status" role="status" aria-live="polite">Look up an asset to read its transfer events.</p>
+        <div class="table-scroll">
+          <table id="history-table" hidden>
+            <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Amount</th><th scope="col">Transaction hash</th></tr></thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+        </div>
+        <button id="history-refresh" type="button" hidden>Refresh history</button>
+        <button id="history-older" type="button" hidden>Load older blocks</button>
+      </section>
+      <section aria-labelledby="database-title">
+        <h2 id="database-title">6. Asset description and metadata</h2>
+        <form id="database-form" hidden>
+          <label>Description<textarea id="asset-description" rows="3" placeholder="Business information about this asset"></textarea></label>
+          <label>Additional metadata (JSON object)<textarea id="asset-metadata" rows="4">{}</textarea></label>
+          <button type="submit">Download asset record</button>
+        </form>
+        <p id="database-status" role="status" aria-live="polite">Look up an asset to prepare its database record.</p>
+        <p class="hint">Download the record, then import it on your database server. Changes here are saved in the download. Document verification will be added in a later checkpoint step.</p>
+      </section>
       <p id="status" role="status" aria-live="polite">Connect a browser wallet on the same network as your factory.</p>
     </main>
     <script type="module" src="/src/main.js"></script>

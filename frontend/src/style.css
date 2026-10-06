@@ -16,5 +16,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid #e1a53c; outline-
 dt { font-weight: 650; margin-top: 12px; }
 dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 #status { position: sticky; bottom: 12px; background: #182b36; color: white; padding: 16px; border-radius: 8px; overflow-wrap: anywhere; }
-#wallet { overflow-wrap: anywhere; }
+#wallet, #transfer-summary { overflow-wrap: anywhere; }
+textarea { display: block; width: 100%; padding: 11px; margin-top: 6px; border: 1px solid #9aabb6; border-radius: 6px; font: inherit; resize: vertical; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { padding: 10px; text-align: left; vertical-align: top; border-bottom: 1px solid #dce4e9; }
+td { overflow-wrap: anywhere; min-width: 150px; max-width: 250px; }
 @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } section { padding: 18px; } }

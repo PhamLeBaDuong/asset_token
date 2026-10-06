@@ -1,17 +1,22 @@
-import { BrowserProvider, Contract, formatUnits, getAddress } from "ethers";
-import { factoryABI, tokenABI, creationArgs, createdEvent, readToken, checkMintRejection, transferArgs } from "./contracts.js";
+import { BrowserProvider, Contract, ZeroAddress, formatUnits, getAddress } from "ethers";
+import { factoryABI, tokenABI, creationArgs, createdEvent, readToken, checkMintRejection, transferArgs, readTransferHistory } from "./contracts.js";
+import { assetRecord } from "./asset-record.js";
 import "./style.css";
 
 const $ = (id) => document.getElementById(id);
 $("factory").value = import.meta.env.VITE_FACTORY_ADDRESS || "";
 $("chain").value = import.meta.env.VITE_CHAIN_ID || "11155111";
 let provider, signer, current, busy = false, generation = 0;
+let history;
 
 function reset() {
   generation++;
   provider = signer = current = undefined;
   $("result").replaceChildren();
   clearTransfer();
+  clearHistory();
+  $("database-form").hidden = true;
+  $("database-status").textContent = "Look up an asset to prepare its database record.";
   $("mint-result").textContent = "Connection changed. Reconnect and look up the asset before running the simulation.";
   $("wallet").textContent = "Connection changed. Connect your wallet again.";
 }
@@ -38,6 +43,51 @@ function clearTransfer() {
   $("transfer-result").textContent = "";
 }
 
+function clearHistory() {
+  history = undefined;
+  $("history-rows").replaceChildren();
+  $("history-table").hidden = true;
+  $("history-refresh").hidden = true;
+  $("history-older").hidden = true;
+  $("history-status").textContent = "Look up an asset to read its transfer events.";
+}
+
+async function loadHistory(ctx, data, older = false) {
+  const previous = older ? history : undefined;
+  const toBlock = older ? previous?.nextToBlock : data.readBlock;
+  if (toBlock == null) return;
+  if (!older) clearHistory();
+  $("history-refresh").hidden = false;
+  $("history-status").textContent = "Reading transfer events from the blockchain...";
+  try {
+    const page = await readTransferHistory(ctx.provider, data.address, data.creationBlock, toBlock);
+    if (ctx.generation !== generation || current?.address !== data.address) return;
+    history = {
+      entries: [...(previous?.entries || []), ...page.entries],
+      fromBlock: page.fromBlock, toBlock: previous?.toBlock ?? page.toBlock,
+      nextToBlock: page.nextToBlock
+    };
+    $("history-rows").replaceChildren();
+    for (const entry of history.entries) {
+      const row = document.createElement("tr");
+      const from = entry.from === ZeroAddress ? "Mint (zero address)" : entry.from;
+      for (const value of [from, entry.to, `${formatUnits(entry.value, data.decimals)} ${data.symbol}`, entry.transactionHash]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.append(cell);
+      }
+      $("history-rows").append(row);
+    }
+    $("history-table").hidden = history.entries.length === 0;
+    $("history-older").hidden = history.nextToBlock === null;
+    $("history-status").textContent = `${history.entries.length} transfer events in blocks ${history.fromBlock}–${history.toBlock}. ${history.nextToBlock === null ? "All blocks through token creation loaded." : "Load older blocks for earlier events."}`;
+  } catch (error) {
+    if (ctx.generation === generation && current?.address === data.address) {
+      $("history-status").textContent = `History could not load: ${error.shortMessage || error.message}. Retry with ${older ? "Load older blocks" : "Refresh history"}.`;
+    }
+  }
+}
+
 async function run(action) {
   if (busy) return;
   busy = true;
@@ -52,6 +102,10 @@ async function run(action) {
 }
 
 function show(data) {
+  if (current?.address !== data.address || current?.chainId !== data.chainId) {
+    $("asset-description").value = "";
+    $("asset-metadata").value = "{}";
+  }
   current = data;
   $("mint-result").textContent = "Asset loaded. You can now check extra mint rejection. No wallet popup is expected.";
   const amount = (value) => `${formatUnits(value, data.decimals)} ${data.symbol}`;
@@ -76,6 +130,8 @@ function show(data) {
   }
   $("transfer-summary").textContent = `Token: ${data.address} | Your balance: ${amount(data.connectedBalance)}`;
   $("transfer-form").hidden = false;
+  $("database-form").hidden = false;
+  $("database-status").textContent = "The download will include this token's address, issuer, chain ID, and your off-chain fields.";
 }
 
 $("connect").onclick = () => run(async () => {
@@ -104,7 +160,10 @@ $("create-form").onsubmit = (event) => {
     $("status").textContent = `Created ${creation.args.tokenAddress}. Transaction: ${receipt.hash}`;
     try {
       const data = await readToken(ctx.provider, ctx.factory, args[3], receipt, await ctx.signer.getAddress());
-      if (ctx.generation === generation) show(data);
+      if (ctx.generation === generation) {
+        show(data);
+        await loadHistory(ctx, data);
+      }
     } catch (error) {
       throw new Error(`Creation succeeded: ${creation.args.tokenAddress}. Transaction: ${receipt.hash}. Reading details failed: ${error.shortMessage || error.message}. Use lookup to retry.`);
     }
@@ -117,11 +176,14 @@ $("lookup-form").onsubmit = (event) => {
     const ctx = await context();
     current = undefined;
     clearTransfer();
+    clearHistory();
+    $("database-form").hidden = true;
     $("mint-result").textContent = "Loading asset. Wait for lookup to finish before running the simulation.";
     $("result").replaceChildren();
     const data = await readToken(ctx.provider, ctx.factory, $("lookup-id").value.trim(), undefined, await ctx.signer.getAddress());
     if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
     show(data);
+    await loadHistory(ctx, data);
     $("status").textContent = "Token details and balances retrieved from the blockchain.";
   });
 };
@@ -186,6 +248,7 @@ $("transfer-form").onsubmit = (event) => {
       show(data);
       $("transfer-amount").value = "";
       $("status").textContent = `Transfer confirmed: ${receipt.hash}. Balances refreshed from the blockchain.`;
+      await loadHistory(ctx, data);
     } catch (error) {
       if (ctx.generation === generation) {
         current = undefined;
@@ -194,5 +257,38 @@ $("transfer-form").onsubmit = (event) => {
       }
       throw new Error(`Transfer confirmed: ${receipt.hash}. Balance refresh failed: ${error.shortMessage || error.message}. Use lookup to retry.`);
     }
+  });
+};
+
+for (const [button, older] of [["history-refresh", false], ["history-older", true]]) {
+  $(button).onclick = () => run(async () => {
+    if (!current) throw new Error("Look up an asset first.");
+    const data = current;
+    const ctx = await context();
+    const latest = older ? data.readBlock : Math.max(data.readBlock, await ctx.provider.getBlockNumber());
+    if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
+    await loadHistory(ctx, { ...data, readBlock: latest }, older);
+    $("status").textContent = $("history-status").textContent;
+  });
+}
+
+$("database-form").onsubmit = (event) => {
+  event.preventDefault();
+  run(async () => {
+    if (!current) throw new Error("Look up an asset first.");
+    const data = current;
+    const ctx = await context();
+    if (ctx.generation !== generation || current !== data) throw new Error("Connection changed. Look up the asset again.");
+    const record = assetRecord(data, $("asset-description").value, $("asset-metadata").value);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(record) + "\n"], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `asset-${record.chain_id}-${record.token_address}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    $("database-status").textContent = "Asset record downloaded. Import this file on the PostgreSQL server to save it.";
+    $("status").textContent = $("database-status").textContent;
   });
 };

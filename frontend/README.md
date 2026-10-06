@@ -142,6 +142,32 @@ authorized transfer are actual confirmed transactions on that local chain.
 tokens and requires an allowance from that owner to the caller. These protections
 already exist in the inherited OpenZeppelin ERC-20; no Solidity changes are needed.
 
+## Checkpoint 2, steps 4 and 5: history and PostgreSQL
+
+After creation, lookup, or a confirmed transfer, the UI reads the token's ERC-20
+`Transfer` events and displays sender, recipient, amount, and transaction hash.
+Minting appears as a transfer from the zero address. Events are newest first.
+History loads the newest 1,000-block window; **Load older blocks** moves toward
+the creation block, including windows with no events. **Refresh history** starts
+again from the latest block. RPC block-range limits cause smaller queries; other
+RPC failures are reported rather than displayed as an empty result. No Solidity
+history array or additional contract storage was added.
+
+The asset description/metadata form downloads a JSON record populated from the
+loaded deployment. Import it into the `asset_token` database on your existing
+remote PostgreSQL container using [the server scripts](../database/README.md).
+The `assets` table stores the asset ID, token/issuer/factory addresses, chain ID,
+description, JSON metadata, valuation, and document hash. Addresses are stored in
+lowercase. Numeric blockchain values use decimal strings in JSON and exact
+PostgreSQL numeric values, preserving values larger than JavaScript's safe integer.
+
+Step 5 uses a file import to save records. The frontend API connection is step 6;
+hashing and metadata verification are steps 7 and 8.
+
+```powershell
+node --test --test-name-pattern="checkpoint steps 4 and 5" test/contracts.test.js
+```
+
 ## Verification and GitHub CI
 
 ### Checkpoint 2, step 1: three wallets, one token

@@ -5,7 +5,8 @@ import { createRequire } from "node:module";
 import solc from "solc";
 import { network } from "hardhat";
 import { BrowserProvider, Contract, ContractFactory, ZeroAddress, ZeroHash, formatUnits, parseUnits, id } from "ethers";
-import { creationArgs, createdEvent, readToken, checkMintRejection, findCreationBlock, factoryABI, tokenABI, transferArgs } from "../src/contracts.js";
+import { creationArgs, createdEvent, readToken, checkMintRejection, findCreationBlock, factoryABI, tokenABI, transferArgs, readTransferHistory } from "../src/contracts.js";
+import { assetRecord } from "../src/asset-record.js";
 
 const require = createRequire(import.meta.url);
 const sample = {
@@ -214,6 +215,92 @@ test("checkpoint step 3: invalid transfers and ERC-20 authorization", async (t) 
       );
       assert.deepEqual(await state(), authorized);
       console.log("Step 3: approved 1,000 DCOF transfer succeeded; Bob 6,500, Carol 3,500, allowance 0, supply 100,000.");
+    });
+  } finally { provider.destroy(); await connection.close(); }
+});
+
+test("checkpoint steps 4 and 5: Transfer logs and deployment-specific database export", async (t) => {
+  const artifact = compileFactory();
+  const connection = await network.connect();
+  let limitRanges = false, disconnected = false, logRequests = 0;
+  const rpc = { request: async (request) => {
+    if (request.method === "eth_getLogs") {
+      logRequests++;
+      if (disconnected) throw Object.assign(new Error("RPC disconnected"), { code: -32000 });
+      const filter = request.params[0];
+      if (limitRanges && filter.fromBlock !== filter.toBlock) {
+        throw Object.assign(new Error("block range limited to one block"), { code: -32005 });
+      }
+    }
+    return connection.provider.request(request);
+  } };
+  const provider = new BrowserProvider(rpc, undefined, { cacheTimeout: -1 });
+  try {
+    const alice = await provider.getSigner(0), bob = await provider.getSigner(1), carol = await provider.getSigner(2);
+    const factory = await new ContractFactory(artifact.abi, artifact.evm.bytecode.object, alice).deploy();
+    await factory.waitForDeployment();
+    const coffee = {
+      ...sample, tokenName: "Duong Coffee Token", tokenSymbol: "DCOF", initialSupply: "100000",
+      assetId: "coffee-001", assetName: "Duong Coffee", assetType: "Business", valuation: "9007199254740993"
+    };
+    const creation = await (await factory.createAssetToken(...creationArgs(coffee))).wait();
+    const tokenAddress = await factory.tokenByAssetId(coffee.assetId);
+    const token = new Contract(tokenAddress, tokenABI, alice);
+    const first = await (await token.transfer(bob.address, parseUnits("10000", 18))).wait();
+    const second = await (await token.connect(bob).transfer(carol.address, parseUnits("2500", 18))).wait();
+    const expectedHashes = [second.hash, first.hash, creation.hash];
+
+    await t.test("history includes mint and both transfers with the correct addresses and amounts", async () => {
+      const page = await readTransferHistory(provider, tokenAddress, creation.blockNumber, second.blockNumber);
+      assert.deepEqual(page.entries.map((entry) => entry.transactionHash), expectedHashes);
+      assert.deepEqual(page.entries.map(({ from, to, value }) => [from, to, value]), [
+        [bob.address, carol.address, parseUnits("2500", 18)],
+        [alice.address, bob.address, parseUnits("10000", 18)],
+        [ZeroAddress, alice.address, parseUnits("100000", 18)]
+      ]);
+      assert.equal(page.nextToBlock, null);
+    });
+    await t.test("older block pages neither skip nor duplicate transfers", async () => {
+      const entries = [];
+      let cursor = second.blockNumber;
+      do {
+        const page = await readTransferHistory(provider, tokenAddress, creation.blockNumber, cursor, 1);
+        assert.equal(page.fromBlock, page.toBlock);
+        entries.push(...page.entries);
+        cursor = page.nextToBlock;
+      } while (cursor !== null);
+      assert.deepEqual(entries.map((entry) => entry.transactionHash), expectedHashes);
+    });
+    await t.test("wallet RPC block limits trigger smaller queries without losing events", async () => {
+      limitRanges = true;
+      logRequests = 0;
+      const page = await readTransferHistory(provider, tokenAddress, creation.blockNumber, second.blockNumber);
+      assert.deepEqual(page.entries.map((entry) => entry.transactionHash), expectedHashes);
+      assert.ok(logRequests > 1);
+      limitRanges = false;
+    });
+    await t.test("an RPC outage is reported rather than shown as empty history", async () => {
+      disconnected = true;
+      logRequests = 0;
+      await assert.rejects(readTransferHistory(provider, tokenAddress, creation.blockNumber, second.blockNumber), /RPC disconnected/);
+      assert.equal(logRequests, 1, "outages must not trigger range splitting");
+      disconnected = false;
+    });
+    await t.test("export uses this deployment and preserves whole-number precision", async () => {
+      const data = await readToken(provider, await factory.getAddress(), coffee.assetId, creation, bob.address, second.blockNumber);
+      const record = JSON.parse(JSON.stringify(assetRecord(data, "Owner's coffee shop", '{"business":"Coffee","image":"https://example.com/coffee.png"}')));
+      assert.equal(record.token_address, tokenAddress.toLowerCase());
+      assert.equal(record.issuer_address, alice.address.toLowerCase());
+      assert.equal(record.factory_address, (await factory.getAddress()).toLowerCase());
+      assert.equal(record.chain_id, (await provider.getNetwork()).chainId.toString());
+      assert.equal(record.creation_transaction_hash, creation.hash);
+      assert.equal(record.valuation, "9007199254740993");
+      assert.equal(record.document_hash, coffee.documentHash);
+      assert.equal(record.description, "Owner's coffee shop");
+      assert.deepEqual(record.metadata, { business: "Coffee", image: "https://example.com/coffee.png" });
+      assert.throws(() => assetRecord(data, "", "[]"), /JSON object/);
+      assert.throws(() => assetRecord(data, "", "null"), /JSON object/);
+      assert.throws(() => assetRecord(data, "", "{broken"), SyntaxError);
     });
   } finally { provider.destroy(); await connection.close(); }
 });

@@ -13,6 +13,7 @@ export const tokenABI = [
   "function totalSupply() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
   "function transfer(address to,uint256 amount) returns (bool)",
+  "event Transfer(address indexed from,address indexed to,uint256 value)",
   "function hasRole(bytes32,address) view returns (bool)",
   "function asset() view returns (string assetId,string assetName,string assetType,uint256 valuation,string currency,string metadataURI,bytes32 documentHash,uint256 tokenizedAt,bool active)"
 ];
@@ -112,9 +113,37 @@ export async function readToken(provider, factoryAddress, assetId, receipt, wall
     token.name(at), token.symbol(at), token.decimals(at), token.totalSupply(at),
     token.balanceOf(issuer, at), token.balanceOf(factoryAddress, at), token.balanceOf(connectedWallet, at), provider.getNetwork()
   ]);
-  return { address, issuer, name, symbol, decimals, supply, balance, factoryBalance, connectedWallet, connectedBalance,
+  return { address, factoryAddress: getAddress(factoryAddress), issuer, name, symbol, decimals, supply, balance, factoryBalance, connectedWallet, connectedBalance,
     asset, chainId: network.chainId, readBlock: blockTag, creationBlock: creation.blockNumber,
     transactionHash: creation.transactionHash, blockHash: block.hash };
+}
+
+export async function readTransferHistory(provider, tokenAddress, creationBlock, toBlock, blockSpan = 1000) {
+  for (const value of [creationBlock, toBlock, blockSpan]) {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error("History block range must use non-negative safe integers.");
+  }
+  if (blockSpan < 1 || toBlock < creationBlock) throw new Error("Invalid history block range.");
+  const token = new Contract(tokenAddress, tokenABI, provider);
+  const fromBlock = Math.max(creationBlock, toBlock - blockSpan + 1);
+  async function query(from, to) {
+    try { return await token.queryFilter(token.filters.Transfer(), from, to); }
+    catch (error) {
+      const message = [error.message, error.info?.error?.message, error.error?.message].filter(Boolean).join(" ");
+      const code = error.info?.error?.code ?? error.error?.code ?? error.code;
+      const rangeLimited = code === -32005 || /block range|too many (results|logs)|query returned more|response size|result limit|maximum.*blocks|limited to.*blocks/i.test(message);
+      if (!rangeLimited || from === to) throw error;
+      const middle = Math.floor((from + to) / 2);
+      const first = await query(from, middle);
+      const second = await query(middle + 1, to);
+      return [...first, ...second];
+    }
+  }
+  const logs = await query(fromBlock, toBlock);
+  const entries = logs.map((log) => ({
+    from: log.args.from, to: log.args.to, value: log.args.value,
+    transactionHash: log.transactionHash, blockNumber: log.blockNumber, logIndex: log.index
+  })).sort((a, b) => b.blockNumber - a.blockNumber || b.logIndex - a.logIndex);
+  return { entries, fromBlock, toBlock, nextToBlock: fromBlock > creationBlock ? fromBlock - 1 : null };
 }
 
 export async function checkMintRejection(provider, tokenAddress, caller) {
