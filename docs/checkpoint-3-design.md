@@ -234,3 +234,28 @@ Suggested commit message:
 ```text
 feat: integrate asset funding campaigns into the wallet frontend
 ```
+
+## Step 8: navigation, role guidance, and a real browser demo
+
+The frontend now has Wallet, Assets, Funding, Transfers, Activity, and Metadata
+pages selected by navbar/hash navigation. Switching pages preserves form data;
+wallet/network changes still clear blockchain context. The Funding page keeps
+issuer and investor entry points visible, explains the required issuer wallet,
+and puts the loaded round and contribution form first.
+
+Development mode includes a local Hardhat session with a tokenized coffee
+business and four test accounts. A dedicated EIP-1193 adapter targets only the
+local session; the injected browser wallet is never replaced. The user can switch
+accounts and advance the local campaign deadline. These endpoints are restricted
+to localhost, same-origin JSON requests, and an explicit RPC allowlist. Production
+builds do not expose the demo server.
+
+A headless browser runner exercised both successful and failed rounds through
+the actual forms, verified claim balances, checked navigation and mobile overflow,
+and saved screenshots and results in `docs/demo/`.
+
+Suggested commit message:
+
+```text
+feat: add workspace navigation and an interactive local funding demo
+```

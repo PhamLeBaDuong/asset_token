@@ -11,6 +11,7 @@ export function mountFundingUI({ document, storage, getContext, run, setStatus, 
     loaded = undefined;
     $("campaign-details").replaceChildren();
     $("campaign-note").textContent = "";
+    $("campaign-round").hidden = true;
     $("campaign-progress").hidden = true;
     $("campaign-contribute-form").hidden = true;
     for (const name of actions) $(`campaign-${name}`).hidden = true;
@@ -20,6 +21,8 @@ export function mountFundingUI({ document, storage, getContext, run, setStatus, 
     clearCampaign();
     asset = undefined;
     $("campaign-controls").hidden = true;
+    $("campaign-prerequisite").hidden = false;
+    $("campaign-role").textContent = "No asset loaded";
     $("campaign-summary").textContent = "Look up an asset to create or load a funding campaign.";
     $("campaign-address").value = "";
     $("campaign-saved").replaceChildren();
@@ -31,9 +34,20 @@ export function mountFundingUI({ document, storage, getContext, run, setStatus, 
       $("campaign-address").value = "";
     }
     asset = data;
+    const isIssuer = getAddress(data.connectedWallet) === getAddress(data.issuer);
+    $("campaign-prerequisite").hidden = true;
     $("campaign-controls").hidden = false;
-    $("campaign-create-form").hidden = getAddress(data.connectedWallet) !== getAddress(data.issuer);
-    $("campaign-summary").textContent = `${data.asset.assetName} funding | ${data.symbol} | Only the original issuer can create a campaign here.`;
+    $("campaign-create-form").hidden = !isIssuer;
+    $("campaign-role").textContent = isIssuer ? "Issuer workspace" : "Investor workspace";
+    $("campaign-summary").textContent = `${data.asset.assetName} / ${data.symbol}`;
+    $("campaign-issuer-notice").hidden = isIssuer;
+    $("campaign-issuer-notice").replaceChildren();
+    if (!isIssuer) {
+      const heading = document.createElement("strong"), explanation = document.createElement("p");
+      heading.textContent = "You're connected as an investor.";
+      explanation.textContent = `To create a campaign, switch to the original issuer wallet (${data.issuer}), reconnect, and reload this asset. To invest, load a campaign in Open a funding round.`;
+      $("campaign-issuer-notice").append(heading, explanation);
+    }
     showSaved();
   }
 
@@ -62,6 +76,10 @@ export function mountFundingUI({ document, storage, getContext, run, setStatus, 
 
   function render(data, wallet) {
     loaded = data;
+    $("campaign-round").hidden = false;
+    $("campaign-state").textContent = campaignStates[Number(data.state)];
+    $("campaign-raised").textContent = `${formatEther(data.totalRaised)} ETH`;
+    $("campaign-goal-display").textContent = `raised of ${formatEther(data.fundingGoal)} ETH goal`;
     const allowed = campaignActions(data, wallet);
     const tokenAmount = (value) => `${formatUnits(value, asset.decimals)} ${asset.symbol}`;
     const rows = {
@@ -190,5 +208,10 @@ export function mountFundingUI({ document, storage, getContext, run, setStatus, 
     run(() => transact("contribute", paymentUnits($("campaign-amount").value)));
   };
   reset();
-  return { reset, setAsset };
+  return { reset, setAsset, getAddress: () => loaded?.address,
+    load: async (address) => refresh(address, await session()), reload: async () => {
+    if (!loaded) throw new Error("Load a campaign first.");
+    await refresh(loaded.address, await session());
+    setStatus("Campaign refreshed from the blockchain.");
+  } };
 }

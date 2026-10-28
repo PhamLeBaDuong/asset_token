@@ -1,8 +1,9 @@
-# Minimal asset token frontend
+# Asset Token workspace
 
 This Vite + ethers frontend works with the existing `AssetTokenFactory` and
 `AssetToken` contracts. A browser wallet signs transactions; the application never
-asks for private keys. Use Node.js 24 LTS and a browser wallet such as MetaMask.
+asks for private keys. Use Node.js 24 LTS. Browser-wallet mode uses a wallet such
+as MetaMask; local demo mode needs no wallet extension.
 
 ## Run
 
@@ -17,12 +18,50 @@ ID and an already deployed factory address, then complete the asset form. Option
 defaults can be set by copying `.env.example` to `.env` and restarting Vite.
 These settings are public configuration, not secrets.
 
+## Navigation and local demo
+
+The navbar switches between Wallet, Assets, Funding, Transfers, Activity, and
+Metadata. Only one page is shown at a time; changing tabs preserves loaded data
+and form values. Shareable hashes such as `/#funding` open the matching page.
+
+For the quickest hands-on test, open **Wallet > Start local demo**. This creates
+an isolated in-process Hardhat blockchain, a tokenized Duong Coffee business,
+and four funded test accounts. The app automatically loads the asset and opens
+Funding as its issuer. No MetaMask, API, testnet faucet, or deployed factory is
+required. The dropdown above the tabs' content switches issuer/Alice/Bob/Carol
+without losing the selected campaign.
+
+Create a round with goal `0.01` ETH and `10000` tokens, choose a future deadline,
+then approve and activate. Switch to Alice, Bob, and Carol and contribute `0.002`,
+`0.003`, and `0.005` ETH. Switch back to the issuer to settle, then each investor
+claims tokens. For a failed round, contribute below goal and click **Advance past
+campaign deadline**, finalize, and claim refunds.
+
+Local demo ETH is simulated. Its chain is separate from browser-wallet networks
+and lasts until the dev server restarts. Refreshing the page disconnects the UI;
+Start local demo reconnects to that server's current session. Leave demo restores
+the normal browser-wallet connection. Demo endpoints exist only in the local Vite
+development server, accept same-origin JSON POSTs, and reject non-local hosts.
+They are absent from the production build and preview server.
+
+Browser demo screenshots and results are in [docs/demo](../docs/demo/). The
+repeatable CDP runner `npm run demo:browser` expects Vite at localhost:5174 and an
+existing local headless browser with remote debugging at localhost:9223. Override
+those URLs with `DEMO_URL` and `DEMO_BROWSER_URL` if needed. It uses a separate
+temporary browser profile, not your wallet browser.
+
 ## Checkpoint 3 funding campaigns
 
-After creating or looking up an asset, scroll to **8. Funding campaigns**.
+After creating or looking up an asset in **Assets**, select **Funding**.
 The original asset issuer can enter an ETH goal, offered token amount, and future
 deadline, then click **Create campaign**. Confirm three separate transactions:
 creation, **Approve offered tokens**, and **Deposit tokens & activate**.
+
+The issuer's creation form is in the **Create a campaign** card. If your account
+is an investor, the card instead identifies the original issuer address and
+explains how to reconnect as that issuer. The **Open a funding round** card is
+for loading a campaign; the **Fund this campaign** form appears when the loaded
+campaign is Active and before its deadline.
 
 Share the displayed campaign address with investors. Each investor connects their
 wallet on the same chain, looks up the same asset, pastes the campaign address,

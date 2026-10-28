@@ -1,0 +1,23 @@
+{
+  "ranAt": "2026-10-28T02:46:11.265Z",
+  "network": "Local Hardhat / simulated ETH",
+  "successful": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+  "failed": "0x0165878A594ca255338adfa4d48449f69242Eb8F",
+  "results": [
+    "Started local demo, loaded Duong Coffee, and displayed the issuer campaign form.",
+    "Created, approved, and activated campaign 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0.",
+    "Investor 1 contributed 0.002 ETH using the browser form.",
+    "Investor 2 contributed 0.003 ETH using the browser form.",
+    "Investor 3 contributed 0.005 ETH using the browser form.",
+    "Investor 1 claimed 2000 DCOF; repeat-claim button is hidden.",
+    "Investor 2 claimed 3000 DCOF; repeat-claim button is hidden.",
+    "Investor 3 claimed 5000 DCOF; repeat-claim button is hidden.",
+    "Second campaign 0x0165878A594ca255338adfa4d48449f69242Eb8F raised 0.0035 / 0.01 ETH and finalized as Failed after advancing local time.",
+    "Investor 1 claimed their refund; repeat-refund button is hidden.",
+    "Investor 2 claimed their refund; repeat-refund button is hidden.",
+    "Failed campaign ETH balance is zero after refunds; issuer recovered all 10,000 reserved tokens.",
+    "Navigation shows one section at a time, and the mobile layout has no page overflow.",
+    "Leaving demo restores the browser-wallet network settings and clears the demo account controls."
+  ],
+  "browserErrors": []
+}

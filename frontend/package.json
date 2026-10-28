@@ -7,6 +7,7 @@
     "compile:funding": "node scripts/build-funding-contract.mjs",
     "predev": "npm run compile:funding",
     "dev": "vite --host 127.0.0.1",
+    "demo:browser": "node scripts/demo-browser.mjs",
     "prebuild": "npm run compile:funding",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",

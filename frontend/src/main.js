@@ -5,6 +5,8 @@ import { fetchAssetRecord, assetRoute } from "./database-api.js";
 import { creationMetadata, parseMetadata, verifyMetadata } from "./metadata-integrity.js";
 import { metadataState, rememberMetadata } from "./metadata-state.js";
 import { mountFundingUI } from "./funding-ui.js";
+import { mountNavigation } from "./navigation.js";
+import { mountDemoUI } from "./demo-wallet.js";
 import "./style.css";
 
 const $ = (id) => document.getElementById(id);
@@ -17,11 +19,16 @@ if (initialRoute) {
 }
 let provider, signer, current, busy = false, generation = 0;
 let history;
+let walletRPC = window.ethereum, localDemoActive = false;
+let normalWorkspace;
+const navigation = mountNavigation({ document, window });
 
 function reset() {
   generation++;
   fundingUI.reset();
   provider = signer = current = undefined;
+  $("workspace-asset").textContent = "No asset loaded";
+  $("workspace-account").textContent = "Reconnect a wallet to continue";
   $("result").replaceChildren();
   clearTransfer();
   clearHistory();
@@ -32,8 +39,8 @@ function reset() {
   $("mint-result").textContent = "Connection changed. Reconnect and look up the asset before running the simulation.";
   $("wallet").textContent = "Connection changed. Connect your wallet again.";
 }
-window.ethereum?.on?.("accountsChanged", reset);
-window.ethereum?.on?.("chainChanged", reset);
+window.ethereum?.on?.("accountsChanged", () => { if (!localDemoActive) reset(); });
+window.ethereum?.on?.("chainChanged", () => { if (!localDemoActive) reset(); });
 $("factory").addEventListener("input", reset);
 $("chain").addEventListener("input", reset);
 
@@ -41,7 +48,7 @@ async function context(factoryAddress) {
   const startedAt = generation;
   if (!provider || !signer) throw new Error("Connect your wallet first.");
   if (!/^\d+$/.test($("chain").value) || BigInt($("chain").value) <= 0n) throw new Error("Enter a valid chain ID.");
-  const chainId = BigInt(await window.ethereum.request({ method: "eth_chainId" }));
+  const chainId = BigInt(await walletRPC.request({ method: "eth_chainId" }));
   if (chainId !== BigInt($("chain").value)) throw new Error("Wrong network. Switch your wallet to the expected chain ID.");
   const factory = getAddress(factoryAddress || $("factory").value.trim());
   if (await provider.getCode(factory) === "0x") throw new Error("No factory contract found on this network at that address.");
@@ -170,12 +177,14 @@ async function loadHistory(ctx, data, older = false) {
 async function run(action) {
   if (busy) return;
   busy = true;
+  $("demo-account").disabled = true;
   document.querySelectorAll("button").forEach((button) => button.disabled = true);
   $("status").textContent = "Working…";
   try { await action(); }
   catch (error) { $("status").textContent = error.reason || error.info?.error?.message || error.error?.message || error.shortMessage || error.message; }
   finally {
     busy = false;
+    $("demo-account").disabled = false;
     document.querySelectorAll("button").forEach((button) => button.disabled = false);
   }
 }
@@ -194,6 +203,8 @@ function show(data, previous = current) {
   $("asset-description").value = metadata.description;
   $("asset-metadata").value = metadata.metadataText;
   current = data;
+  $("workspace-asset").textContent = `${data.asset.assetName} / ${data.symbol}`;
+  $("workspace-account").textContent = `${data.connectedWallet.slice(0, 6)}...${data.connectedWallet.slice(-4)} / Chain ${data.chainId}`;
   fundingUI.setAsset(data);
   $("mint-result").textContent = "Asset loaded. You can now check extra mint rejection. No wallet popup is expected.";
   const amount = (value) => `${formatUnits(value, data.decimals)} ${data.symbol}`;
@@ -270,13 +281,14 @@ async function loadDatabaseAsset(assetId, updateRoute = true) {
 }
 
 $("connect").onclick = () => run(async () => {
-  if (!window.ethereum) throw new Error("Install a browser wallet such as MetaMask first.");
-  provider = new BrowserProvider(window.ethereum);
+  if (!walletRPC) throw new Error("Install a browser wallet such as MetaMask, or start the local demo.");
+  provider = new BrowserProvider(walletRPC, undefined, { cacheTimeout: -1 });
   await provider.send("eth_requestAccounts", []);
   signer = await provider.getSigner();
   const network = await provider.getNetwork();
   $("wallet").textContent = `Connected wallet: ${await signer.getAddress()} · Chain ${network.chainId}`;
   $("status").textContent = "Wallet connected. Verify the factory address and expected chain before creating.";
+  $("workspace-account").textContent = `${(await signer.getAddress()).slice(0, 8)}... / Chain ${network.chainId}`;
   const route = assetRoute(window.location);
   if (route) await loadDatabaseAsset(route.assetId, false);
 });
@@ -500,5 +512,52 @@ const fundingUI = mountFundingUI({
     if (ctx.generation !== generation || current?.address !== asset.address) throw new Error("Connection changed.");
     show(data);
     await loadHistory(ctx, data);
+  }
+});
+
+mountDemoUI({
+  enabled: import.meta.env.DEV, document, run, navigate: navigation.navigate,
+  getCampaign: fundingUI.getAddress, reloadCampaign: fundingUI.reload,
+  onAccount: async (rpc, info) => {
+    const enteringDemo = !localDemoActive;
+    if (enteringDemo) normalWorkspace = { chain: $("chain").value, factory: $("factory").value, assetId: $("lookup-id").value };
+    const campaign = localDemoActive ? fundingUI.getAddress() : undefined;
+    reset();
+    localDemoActive = true;
+    walletRPC = rpc;
+    $("chain").value = info.chainId;
+    $("factory").value = info.factory;
+    $("lookup-id").value = info.assetId;
+    $("environment-badge").textContent = "Local demo / simulated ETH";
+    $("connect").textContent = "Reconnect demo account";
+    provider = new BrowserProvider(walletRPC, undefined, { cacheTimeout: -1 });
+    signer = await provider.getSigner();
+    $("wallet").textContent = `Local demo wallet: ${await signer.getAddress()} / Chain ${info.chainId}`;
+    const ctx = await context();
+    const data = await readToken(provider, info.factory, info.assetId, undefined, await signer.getAddress());
+    show(data);
+    if (enteringDemo) {
+      $("campaign-goal").value = "0.01";
+      $("campaign-offered").value = "10000";
+      const block = await provider.getBlock("latest");
+      const date = new Date((block.timestamp + 86400) * 1000);
+      $("campaign-deadline").value = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    }
+    await loadHistory(ctx, data);
+    if (campaign) await fundingUI.load(campaign);
+    $("status").textContent = data.connectedWallet === data.issuer
+      ? "Issuer demo account loaded. Create a round, approve tokens, then activate; or manage the selected campaign."
+      : "Investor demo account loaded. Fund an active round, or claim your tokens/refund when available.";
+  },
+  onExit: async () => {
+    reset();
+    localDemoActive = false;
+    walletRPC = window.ethereum;
+    $("chain").value = normalWorkspace?.chain ?? (import.meta.env.VITE_CHAIN_ID || "11155111");
+    $("factory").value = normalWorkspace?.factory ?? (import.meta.env.VITE_FACTORY_ADDRESS || "");
+    $("lookup-id").value = normalWorkspace?.assetId ?? "";
+    $("environment-badge").textContent = "Browser wallet";
+    $("connect").textContent = "Connect browser wallet";
+    $("status").textContent = "Connect your browser wallet to use your own network.";
   }
 });

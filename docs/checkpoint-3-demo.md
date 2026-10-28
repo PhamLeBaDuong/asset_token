@@ -1,5 +1,32 @@
 # Checkpoint 3 demo
 
+## Quick local demo: no wallet extension
+
+1. From `frontend`, run `npm run dev` and open its localhost URL.
+2. In **Wallet**, click **Start local demo**. The app creates the coffee business
+   and opens **Funding** as the issuer. All ETH in this mode is simulated.
+3. In **Create a campaign**, enter goal `0.01`, tokens `10000`, and a future
+   deadline. Create, approve, and activate.
+4. Use the local demo account dropdown to select Alice, Bob, and Carol. The
+   selected campaign stays loaded. In **Fund this campaign**, contribute `0.002`,
+   `0.003`, and `0.005` ETH respectively.
+5. Select the issuer and settle. Select each investor and claim their tokens.
+6. As issuer, create a second round. Activate it and contribute only `0.002` as
+   Alice and `0.0015` as Bob. Click **Advance past campaign deadline**, then
+   finalize. Each investor claims a refund; the issuer reclaims offered tokens.
+
+If using a real browser wallet, follow the network setup and stories below.
+Your screenshot's missing creation form means the loaded asset's connected
+wallet differs from its original issuer. The redesigned issuer card now explains
+this and shows the required issuer address. Investors contribute after loading an
+Active campaign in Funding, not by entering the asset's token address.
+
+The local browser demo was exercised through the actual rendered UI. See
+[results](demo/results.json), [issuer screenshot](demo/02-issuer-create.png),
+[investor screenshot](demo/03-investor-contribute.png), and
+[refund screenshot](demo/05-failed-refund.png). Demo addresses in the report belong
+to that ephemeral local chain; they are not testnet addresses.
+
 ## Prepare
 
 From `frontend`, run `npm run dev` and open the URL it prints. Use the existing
@@ -24,7 +51,7 @@ They do not alter the browser's network or live testnet campaigns.
 ## Story 1: success
 
 1. Connect the issuer and look up the asset.
-2. In Funding campaigns, set goal to `0.01` ETH, offered tokens to `10000`, and a
+2. In the Funding tab, set goal to `0.01` ETH, offered tokens to `10000`, and a
    deadline comfortably in the future. Create the campaign and copy its address.
 3. Click Approve offered tokens, then Deposit tokens & activate. Confirm each
    transaction. Show the issuer's token balance falling by 10,000 and state Active.
@@ -70,6 +97,7 @@ Browser addresses are saved locally for convenience. Other browsers need the
 shared address. The UI checks the compiled campaign code, linked token, and issuer;
 the asset page has already checked the token's factory registration.
 
-Browser wallet interaction still requires a live rehearsal. Automated UI tests
-exercise the real handlers and contracts with a small DOM adapter; they do not
-drive MetaMask or render the page in a browser.
+The browser demo runner renders the page and exercises the actual forms against
+the local blockchain, including mobile layout checks. Automated unit/UI tests
+also use a small DOM adapter. MetaMask and Sepolia interaction still require a
+separate live rehearsal with your own testnet accounts.

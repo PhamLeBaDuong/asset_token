@@ -3,22 +3,45 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Asset tokenization</title>
+    <title>Asset Token | Funding workspace</title>
   </head>
   <body>
     <main>
-      <header><p class="eyebrow">ASSET TOKENIZATION</p><h1>Create an asset token</h1>
-        <p>Register your asset onchain. The connected wallet receives the entire initial token supply.</p>
+      <header class="app-header"><div><p class="eyebrow">ASSET TOKEN</p><h1>Your asset workspace</h1>
+        <p>Tokenize a business. Fund its next chapter.</p></div><span id="environment-badge" class="badge">Browser wallet</span>
       </header>
+      <nav class="main-nav" aria-label="Workspace">
+        <a href="#wallet" data-page-link="wallet">Wallet</a><a href="#assets" data-page-link="assets">Assets</a><a href="#funding" data-page-link="funding">Funding</a><a href="#transfers" data-page-link="transfers">Transfers</a><a href="#activity" data-page-link="activity">Activity</a><a href="#metadata" data-page-link="metadata">Metadata</a>
+      </nav>
+      <div class="workspace-context"><span id="workspace-asset">No asset loaded</span><span id="workspace-account">Connect a wallet to begin</span></div>
+      <p id="status" role="status" aria-live="polite">Connect a browser wallet, or start the local demo in Wallet.</p>
+      <div id="demo-controls" class="demo-toolbar" hidden>
+        <div><span class="step-label">LOCAL DEMO ACCOUNT</span><select id="demo-account" aria-label="Demo account"></select><span id="demo-account-address" class="hint"></span></div>
+        <div class="button-row"><button id="demo-deadline" type="button" class="secondary">Advance past campaign deadline</button><button id="demo-exit" type="button" class="secondary">Leave demo</button></div>
+      </div>
+      <div id="page-wallet" data-page="wallet">
+      <div class="page-intro"><p class="eyebrow">GET STARTED</p><h2>Choose your workspace</h2><p>Use your own wallet, or try a funding round with local test accounts.</p></div>
+      <div class="two-column">
       <section aria-labelledby="connection-title">
-        <h2 id="connection-title">1. Connect</h2>
+        <span class="step-label">YOUR NETWORK</span><h2 id="connection-title">Connect a wallet</h2>
         <label>Expected chain ID<input id="chain" inputmode="numeric" placeholder="11155111 (Sepolia)" required /></label>
         <label>Deployed factory address<input id="factory" placeholder="0x…" required /></label>
         <button id="connect" type="button">Connect wallet</button>
         <p id="wallet">No wallet connected.</p>
+        <a class="text-link" href="#assets" data-page-link="assets">Next: create or load an asset &rarr;</a>
       </section>
+      <section id="demo-section" class="demo-card" aria-labelledby="demo-title" hidden>
+        <span class="step-label">NO WALLET NEEDED</span><h2 id="demo-title">Try the funding demo</h2>
+        <p>A local blockchain, a coffee business, and four funded test accounts. Use the same funding forms with simulated ETH.</p>
+        <button id="demo-start" type="button">Start local demo</button>
+        <p id="demo-status" class="hint" role="status">Demo data lasts until the development server restarts.</p>
+      </section>
+      </div></div>
+      <div id="page-assets" data-page="assets" hidden>
+      <div class="page-intro"><p class="eyebrow">YOUR BUSINESS</p><h2>Assets</h2><p>Create a tokenized business or load an existing one before opening a funding round.</p></div>
       <section aria-labelledby="create-title">
-        <h2 id="create-title">2. Describe your asset</h2>
+        <details><summary class="section-summary" id="create-title">Create a new asset token</summary>
+        <p>The connected wallet becomes the original issuer and receives the initial supply.</p>
         <form id="create-form">
           <div class="grid">
             <label>Asset ID<input name="assetId" required placeholder="PROPERTY-001" /></label>
@@ -38,18 +61,23 @@
           <p class="hint">Supply is minted once, at creation. The description and metadata are included in the hash recorded by the token. Keep the downloaded asset record to save them in PostgreSQL.</p>
           <button type="submit">Create token &amp; mint initial supply</button>
         </form>
+        </details>
       </section>
       <section aria-labelledby="lookup-title">
-        <h2 id="lookup-title">3. Read from the blockchain</h2>
+        <h2 id="lookup-title">Load an asset</h2>
         <form id="lookup-form"><label>Asset ID<input id="lookup-id" required placeholder="PROPERTY-001" /></label><button type="submit">Look up / refresh token</button> <button id="lookup-db" type="button">Load saved asset</button></form>
         <p class="hint">Load saved asset retrieves its description and metadata from PostgreSQL, then reads balances and transfers from its token contract.</p>
         <dl id="result"></dl>
-        <!-- <button id="mint-check" type="button">Check extra mint rejection (simulation)</button> -->
+        <a class="text-link" href="#funding" data-page-link="funding">Open funding for this asset &rarr;</a>
+        <details class="advanced"><summary>Token supply check</summary><button id="mint-check" type="button" class="secondary">Check extra mint rejection (simulation)</button>
         <p id="mint-result" role="status" aria-live="polite">Look up an asset first, then run the simulation. No wallet popup is expected.</p>
         <p class="hint">Simulates mint(address,uint256) from the connected wallet. No transaction is sent and no gas is spent. This contract exposes no additional mint function, so every caller should be rejected.</p>
+        </details>
       </section>
+      </div><div id="page-transfers" data-page="transfers" hidden>
+      <div class="page-intro"><p class="eyebrow">MOVE OWNERSHIP</p><h2>Transfers</h2><p>Send existing asset tokens to another wallet.</p></div>
       <section aria-labelledby="transfer-title">
-        <h2 id="transfer-title">4. Transfer tokens</h2>
+        <h2 id="transfer-title">Transfer tokens</h2>
         <p id="transfer-summary">Connect your wallet and look up an asset to transfer its tokens.</p>
         <form id="transfer-form" hidden>
           <label>Recipient wallet address<input id="transfer-recipient" required placeholder="0x..." autocomplete="off" /></label>
@@ -59,8 +87,10 @@
         </form>
         <p id="transfer-result" role="status" aria-live="polite"></p>
       </section>
+      </div><div id="page-activity" data-page="activity" hidden>
+      <div class="page-intro"><p class="eyebrow">ON-CHAIN RECORD</p><h2>Activity</h2><p>Explore the loaded asset's token transfers, including its initial mint.</p></div>
       <section aria-labelledby="history-title">
-        <h2 id="history-title">5. Transaction history</h2>
+        <h2 id="history-title">Token transaction history</h2>
         <p id="history-status" role="status" aria-live="polite">Look up an asset to read its transfer events.</p>
         <div class="table-scroll">
           <table id="history-table" hidden>
@@ -71,8 +101,10 @@
         <button id="history-refresh" type="button" hidden>Refresh history</button>
         <button id="history-older" type="button" hidden>Load older blocks</button>
       </section>
+      </div><div id="page-metadata" data-page="metadata" hidden>
+      <div class="page-intro"><p class="eyebrow">BUSINESS RECORD</p><h2>Metadata</h2><p>Manage the asset description and verify its integrity.</p></div>
       <section aria-labelledby="database-title">
-        <h2 id="database-title">6. Asset description and metadata</h2>
+        <h2 id="database-title">Description &amp; database record</h2>
         <dl id="database-details"></dl>
         <form id="database-form" hidden>
           <label>Description<textarea id="asset-description" rows="3" placeholder="Business information about this asset"></textarea></label>
@@ -85,7 +117,7 @@
         <p class="hint">Download the record, then import it on your database server. Edits are unsaved until imported. Editing a committed field changes its hash; the token's original hash stays fixed.</p>
       </section>
       <section id="integrity-section" aria-labelledby="integrity-title" hidden>
-        <h2 id="integrity-title">7. Metadata integrity</h2>
+        <h2 id="integrity-title">Metadata integrity</h2>
         <p id="integrity-source"></p>
         <p id="integrity-status" role="status" aria-live="polite"></p>
         <dl id="integrity-details"></dl>
@@ -93,12 +125,37 @@
         <details id="integrity-canonical" hidden><summary>Canonical document used for verification</summary><pre id="integrity-document"></pre></details>
         <p class="hint">Verification checks that the document matches the recorded hash. It does not establish whether the document's business claims are true.</p>
       </section>
-      <section aria-labelledby="campaign-title">
-        <h2 id="campaign-title">8. Funding campaigns</h2>
-        <p id="campaign-summary">Look up an asset to create or load a funding campaign.</p>
+      </div><div id="page-funding" data-page="funding" hidden>
+        <div class="page-intro"><p class="eyebrow">GROW TOGETHER</p><h2>Funding</h2><p>Issuers open a round. Investors fund it and claim tokens after success.</p></div>
+        <div id="campaign-prerequisite" class="empty-state"><h3>Start with a tokenized business</h3><p>Connect a wallet, then load an asset. Or start the local demo to try both roles immediately.</p><div class="button-row"><a href="#assets" data-page-link="assets" class="button-link">Load an asset</a><a href="#wallet" data-page-link="wallet" class="text-link">Try local demo &rarr;</a></div></div>
+        <div class="funding-context"><p id="campaign-summary">Look up an asset to create or load a funding campaign.</p><span id="campaign-role" class="badge">No asset loaded</span></div>
         <div id="campaign-controls" hidden>
+          <section id="campaign-round" aria-labelledby="round-title" hidden>
+            <div class="round-header"><div><span class="step-label">CURRENT ROUND</span><h2 id="round-title">Campaign overview</h2></div><span id="campaign-state" class="badge"></span></div>
+            <div class="funding-totals"><strong id="campaign-raised">0 ETH</strong><span id="campaign-goal-display"></span></div>
+            <progress id="campaign-progress" aria-label="Funding progress" max="100" value="0" hidden></progress>
+            <form id="campaign-contribute-form" class="contribute-card" hidden>
+              <h3>Fund this campaign</h3><p>Your ETH stays locked until successful settlement or a failed-campaign refund.</p>
+              <label>Contribution (ETH)<input id="campaign-amount" required inputmode="decimal" placeholder="0.002" /></label>
+              <p id="campaign-remaining" class="hint"></p><button type="submit">Contribute ETH</button>
+            </form>
+            <p id="campaign-note" role="status" aria-live="polite"></p>
+            <div class="campaign-actions">
+              <button id="campaign-approve" type="button" hidden>1. Approve offered tokens</button>
+              <button id="campaign-activate" type="button" hidden>2. Deposit tokens &amp; activate</button>
+              <button id="campaign-finalize" type="button" hidden>Finalize failed campaign</button>
+              <button id="campaign-settle" type="button" hidden>Settle &amp; receive funding</button>
+              <button id="campaign-claimTokens" type="button" hidden>Claim your tokens</button>
+              <button id="campaign-claimRefund" type="button" hidden>Claim your refund</button>
+              <button id="campaign-reclaimFailedTokens" type="button" hidden>Reclaim offered tokens</button>
+              <button id="campaign-reclaimRemainder" type="button" hidden>Reclaim rounding remainder</button>
+            </div>
+            <details class="advanced"><summary>Campaign &amp; wallet details</summary><dl id="campaign-details" class="detail-grid"></dl></details>
+          </section>
+          <div class="two-column">
+          <section aria-labelledby="campaign-title"><span class="step-label">FOR THE BUSINESS OWNER</span><h2 id="campaign-title">Create a campaign</h2>
+          <div id="campaign-issuer-notice" class="role-notice" hidden></div>
           <form id="campaign-create-form" hidden>
-            <h3>Create a funding round</h3>
             <div class="grid">
               <label>Funding goal / hard cap (ETH)<input id="campaign-goal" required inputmode="decimal" placeholder="0.01" /></label>
               <label>Tokens offered<input id="campaign-offered" required inputmode="decimal" placeholder="10000" /></label>
@@ -107,33 +164,16 @@
             <p class="hint">The campaign closes as soon as the goal is reached. Tokens stay reserved until successful claims or return after failure. Creating a campaign is followed by separate approval and activation transactions.</p>
             <button type="submit">Create campaign</button>
           </form>
+          </section><section aria-labelledby="invest-title"><span class="step-label">FOR INVESTORS &amp; ISSUERS</span><h2 id="invest-title">Open a funding round</h2><p>Paste the address shared by the issuer, or choose a round saved in this browser.</p>
           <form id="campaign-load-form">
             <label>Campaign address<input id="campaign-address" required list="campaign-saved" placeholder="Paste a campaign address, or choose one saved in this browser" autocomplete="off" /></label>
             <datalist id="campaign-saved"></datalist>
             <button type="submit">Load / refresh campaign</button>
           </form>
-          <p class="hint">Share this address with investors. Saved addresses belong to this browser and network; campaign balances and state come from the blockchain.</p>
-          <progress id="campaign-progress" aria-label="Funding progress" max="100" value="0" hidden></progress>
-          <dl id="campaign-details"></dl>
-          <p id="campaign-note" role="status" aria-live="polite"></p>
-          <div class="campaign-actions">
-            <button id="campaign-approve" type="button" hidden>1. Approve offered tokens</button>
-            <button id="campaign-activate" type="button" hidden>2. Deposit tokens &amp; activate</button>
-            <button id="campaign-finalize" type="button" hidden>Finalize failed campaign</button>
-            <button id="campaign-settle" type="button" hidden>Settle &amp; receive funding</button>
-            <button id="campaign-claimTokens" type="button" hidden>Claim your tokens</button>
-            <button id="campaign-claimRefund" type="button" hidden>Claim your refund</button>
-            <button id="campaign-reclaimFailedTokens" type="button" hidden>Reclaim offered tokens</button>
-            <button id="campaign-reclaimRemainder" type="button" hidden>Reclaim rounding remainder</button>
-          </div>
-          <form id="campaign-contribute-form" hidden>
-            <label>Contribution (ETH)<input id="campaign-amount" required inputmode="decimal" placeholder="0.002" /></label>
-            <p id="campaign-remaining" class="hint"></p>
-            <button type="submit">Contribute ETH</button>
-          </form>
+          <p class="hint">Load an active round to reveal the contribution form. Saved addresses belong to this browser and network.</p>
+          </section></div>
         </div>
-      </section>
-      <p id="status" role="status" aria-live="polite">Connect a browser wallet on the same network as your factory.</p>
+      </div>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>
