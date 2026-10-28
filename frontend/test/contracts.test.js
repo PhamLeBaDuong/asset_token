@@ -11,6 +11,7 @@ import { readLinkedToken } from "../src/contracts.js";
 import { fetchAssetRecord, assetRoute } from "../src/database-api.js";
 import { createApp } from "../../server/src/app.js";
 import { once } from "node:events";
+import { creationMetadata, hashMetadata, verifyMetadata } from "../src/metadata-integrity.js";
 
 const require = createRequire(import.meta.url);
 const sample = {
@@ -346,6 +347,58 @@ test("checkpoint step 6: API asset record resolves its actual token on the block
     await assert.rejects(readLinkedToken(provider, { ...record, issuer_address: bob.address }, bob.address), /deployment details/);
     await assert.rejects(readLinkedToken(provider, { ...record, creation_block: "0" }, bob.address), /deployment details/);
     await assert.rejects(readLinkedToken(provider, { ...record, creation_transaction_hash: ZeroHash }, bob.address), /deployment details/);
+  } finally {
+    if (api) await new Promise((resolve) => api.close(resolve));
+    provider.destroy();
+    await connection.close();
+  }
+});
+
+test("checkpoint steps 7 and 8: metadata commitment detects an altered database record", async () => {
+  const artifact = compileFactory();
+  const connection = await network.connect();
+  const provider = new BrowserProvider(connection.provider, undefined, { cacheTimeout: -1 });
+  let api;
+  try {
+    const alice = await provider.getSigner(0);
+    const factory = await new ContractFactory(artifact.abi, artifact.evm.bytecode.object, alice).deploy();
+    await factory.waitForDeployment();
+    const coffee = {
+      ...sample, tokenName: "Duong Coffee Token", tokenSymbol: "DCOF", initialSupply: "100000",
+      assetId: "coffee-cp2-001", assetName: "Duong Coffee", assetType: "Business",
+      valuation: "500000", metadataURI: "urn:asset:coffee-cp2-001"
+    };
+    const description = "Coffee shop";
+    const metadataText = '{"location":"Indianapolis","documents":["business-info.json"]}';
+    const commitment = creationMetadata(coffee, description, metadataText);
+    const receipt = await (await factory.createAssetToken(...creationArgs({ ...coffee, documentHash: commitment.hash }))).wait();
+    const original = await readToken(provider, await factory.getAddress(), coffee.assetId, receipt, alice.address);
+    assert.equal(original.asset.documentHash, commitment.hash);
+    const exported = JSON.parse(JSON.stringify(assetRecord(original, description, metadataText)));
+    let saved = { ...exported, metadata: { documents: ["business-info.json"], location: "Indianapolis" } };
+    api = createApp({ query: async () => ({ rows: [saved] }) }, () => {});
+    api.listen(0, "127.0.0.1");
+    await once(api, "listening");
+    async function verifySaved() {
+      const record = await fetchAssetRecord(coffee.assetId, original.chainId.toString(), (path) => fetch(`http://127.0.0.1:${api.address().port}${path}`));
+      const loaded = await readLinkedToken(provider, record, alice.address);
+      const check = verifyMetadata(loaded.database, loaded.asset.documentHash);
+      assert.equal(loaded.supply, parseUnits("100000", 18));
+      assert.equal(loaded.balance, loaded.supply);
+      return { loaded, check };
+    }
+    assert.equal((await verifySaved()).check.status, "verified");
+    saved = { ...saved, valuation: "900000" };
+    const altered = await verifySaved();
+    assert.equal(altered.loaded.asset.valuation, 500000n, "changing DB valuation must not change the contract");
+    assert.equal(altered.check.status, "failed");
+    saved.document_hash = hashMetadata(saved).hash;
+    assert.equal((await verifySaved()).check.status, "failed", "replacing both DB data and its hash cannot override the chain");
+    saved = exported;
+    assert.equal((await verifySaved()).check.status, "verified");
+    saved = { ...saved, description: "Changed description" };
+    assert.equal((await verifySaved()).check.status, "failed");
+    console.log("Steps 7/8 verified: original metadata matches; changed valuation and forged DB hash fail; restoring metadata matches again.");
   } finally {
     if (api) await new Promise((resolve) => api.close(resolve));
     provider.destroy();

@@ -102,7 +102,9 @@ the soccer database path. `?schema=public` is a Prisma setting and is not needed
 for a plain PostgreSQL connection. These are server/API settings; never put
 database credentials in frontend `VITE_*` variables. This step does not use JWT.
 
-The record stores the existing on-chain `document_hash`; it does not hash or
-verify the exported document. Hashing and integrity verification come in steps
-7 and 8. The frontend-to-database API link is implemented in
+The importer stores the supplied `document_hash`; it does not verify a document
+against the blockchain. The frontend now computes a commitment before token
+creation and verifies saved records against the token in steps 7 and 8. See
+[the metadata format](../docs/metadata-format.md) and
+[the presentation guide](../docs/checkpoint-2-demo.md). The API link is implemented in
 [server](../server/README.md) for step 6.

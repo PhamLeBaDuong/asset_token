@@ -162,7 +162,7 @@ lowercase. Numeric blockchain values use decimal strings in JSON and exact
 PostgreSQL numeric values, preserving values larger than JavaScript's safe integer.
 
 Step 5 uses a file import to save records. The frontend API connection is step 6;
-hashing and metadata verification are steps 7 and 8.
+hashing and metadata verification are implemented in steps 7 and 8 below.
 
 ```powershell
 node --test --test-name-pattern="checkpoint steps 4 and 5" test/contracts.test.js
@@ -185,10 +185,48 @@ Transfers remain signed by the browser wallet and refresh their token balances.
 
 Database API reads do not save edits; downloading and importing remains the
 save flow. This step validates the deployment link. Document hashing and
-metadata integrity verification remain steps 7 and 8.
+metadata integrity verification are described below.
 
 ```powershell
 node --test --test-name-pattern="checkpoint step 6" test/contracts.test.js
+```
+
+## Checkpoint 2, steps 7 and 8: metadata integrity
+
+The creation form now accepts the off-chain description and a JSON metadata
+object and automatically calculates the hash sent to the token constructor.
+After creation, those exact values populate the download form. The app keeps the
+original document in this browser, scoped to the token address and chain, so
+refreshing or switching wallets can restore it. Download the record and import
+it into PostgreSQL as in step 5; browser storage is not a database backup.
+
+For older tokens without a cached document, lookup tries the current form values
+and the blank description/empty metadata defaults. It accepts a recovered document
+only if its hash matches the live token hash. Otherwise it reports **Metadata not
+loaded** rather than comparing invented empty fields and reporting tampering.
+Load the saved database record or enter the original description and JSON in
+section 6 to verify an existing token.
+
+**Load saved asset** reconstructs its committed document from the saved database
+fields and compares its Keccak-256 hash with the hash read from the token. The
+integrity section shows verified, failed, or unanchored status, both hashes, and
+the exact canonical document. **Recheck saved metadata** fetches the database
+record and blockchain state again. The database's copied hash is checked and
+reported separately; it never replaces the authoritative on-chain hash.
+
+**Preview edited metadata integrity** checks unsaved form edits without writing
+to PostgreSQL. Saved and draft results are labeled separately. A database edit
+to a committed field is detected after rechecking. Supply, transfers, and database
+timestamps are outside the committed document, so they do not invalidate it.
+
+Read [the exact metadata format](../docs/metadata-format.md) and use
+[the presentation walkthrough](../docs/checkpoint-2-demo.md) for a full demo.
+Existing tokens retain their original hash; create a new token through this form
+for the commitment demo. Hash matching establishes document integrity, not the
+truth of a valuation or other business claim.
+
+```powershell
+node --test --test-name-pattern="checkpoint steps 7 and 8" test/contracts.test.js
 ```
 
 ## Verification and GitHub CI

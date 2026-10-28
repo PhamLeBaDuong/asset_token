@@ -1,8 +1,7 @@
+import { parseMetadata } from "./metadata-integrity.js";
+
 export function assetRecord(data, description, metadataText) {
-  const metadata = JSON.parse(metadataText.trim() || "{}");
-  if (!metadata || Array.isArray(metadata) || typeof metadata !== "object") {
-    throw new Error("Off-chain metadata must be a JSON object.");
-  }
+  const metadata = parseMetadata(metadataText);
   return {
     asset_id: data.asset.assetId,
     name: data.asset.assetName,

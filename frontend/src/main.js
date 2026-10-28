@@ -2,6 +2,8 @@ import { BrowserProvider, Contract, ZeroAddress, formatUnits, getAddress } from 
 import { factoryABI, tokenABI, creationArgs, createdEvent, readToken, readLinkedToken, checkMintRejection, transferArgs, readTransferHistory } from "./contracts.js";
 import { assetRecord } from "./asset-record.js";
 import { fetchAssetRecord, assetRoute } from "./database-api.js";
+import { creationMetadata, parseMetadata, verifyMetadata } from "./metadata-integrity.js";
+import { metadataState, rememberMetadata } from "./metadata-state.js";
 import "./style.css";
 
 const $ = (id) => document.getElementById(id);
@@ -24,6 +26,7 @@ function reset() {
   $("database-form").hidden = true;
   $("database-status").textContent = "Look up an asset to prepare its database record.";
   $("database-details").replaceChildren();
+  clearIntegrity();
   $("mint-result").textContent = "Connection changed. Reconnect and look up the asset before running the simulation.";
   $("wallet").textContent = "Connection changed. Connect your wallet again.";
 }
@@ -41,7 +44,7 @@ async function context(factoryAddress) {
   const factory = getAddress(factoryAddress || $("factory").value.trim());
   if (await provider.getCode(factory) === "0x") throw new Error("No factory contract found on this network at that address.");
   if (startedAt !== generation) throw new Error("Connection changed. Reconnect and retry.");
-  return { provider, signer, factory, generation };
+  return { provider, signer, factory, chainId, generation };
 }
 
 function clearTransfer() {
@@ -49,6 +52,73 @@ function clearTransfer() {
   $("transfer-summary").textContent = "Connect your wallet and look up an asset to transfer its tokens.";
   $("transfer-result").textContent = "";
 }
+
+function clearIntegrity() {
+  $("integrity-section").hidden = true;
+  $("integrity-details").replaceChildren();
+  $("integrity-document").textContent = "";
+  $("integrity-canonical").hidden = true;
+  $("draft-integrity").textContent = "";
+}
+
+function showIntegrity(data) {
+  $("integrity-section").hidden = false;
+  $("verify-saved").hidden = !data.database;
+  $("integrity-details").replaceChildren();
+  $("integrity-document").textContent = "";
+  $("integrity-canonical").hidden = true;
+  $("integrity-source").textContent = data.database ? "Checking the saved PostgreSQL record against this token." : "Checking the current off-chain draft against this token.";
+  if (!data.metadataAvailable) {
+    const unanchored = /^0x0{64}$/i.test(data.asset.documentHash);
+    $("integrity-status").className = "integrity-unanchored";
+    $("integrity-source").textContent = "The token is loaded; its off-chain document is not loaded.";
+    $("integrity-status").textContent = unanchored
+      ? "No metadata hash was recorded on chain."
+      : "Metadata not loaded. Click Load saved asset, or enter the original description and metadata to check them. No integrity result is available yet.";
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = "Hash read from token";
+    dd.textContent = data.asset.documentHash;
+    $("integrity-details").append(dt, dd);
+    return;
+  }
+  try {
+    const record = data.database || assetRecord(data, $("asset-description").value, $("asset-metadata").value);
+    const check = verifyMetadata(record, data.asset.documentHash);
+    $("integrity-status").className = `integrity-${check.status}`;
+    $("integrity-status").textContent = {
+      verified: "Verified against blockchain: metadata matches the recorded hash.",
+      failed: "Integrity check failed: metadata does not match the recorded hash.",
+      unanchored: "No metadata hash was recorded on chain. Create a new token with a metadata hash to demonstrate verification."
+    }[check.status];
+    const rows = {
+      "Hash read from token": check.onChainHash,
+      "Computed metadata hash": check.hash
+    };
+    if (data.database) rows["Database hash copy"] = check.databaseHashMatches ? "Matches the token" : "Differs from the token; the comparison above uses the on-chain hash";
+    for (const [label, value] of Object.entries(rows)) {
+      const dt = document.createElement("dt"), dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = value;
+      $("integrity-details").append(dt, dd);
+    }
+    $("integrity-document").textContent = check.canonical;
+    $("integrity-canonical").hidden = false;
+  } catch (error) {
+    $("integrity-status").className = "integrity-failed";
+    $("integrity-status").textContent = `Metadata could not be verified: ${error.message}`;
+  }
+}
+
+$("create-form").addEventListener("input", () => {
+  try {
+    const commitment = creationMetadata(Object.fromEntries(new FormData($("create-form"))), $("creation-description").value, $("creation-metadata").value);
+    $("creation-hash").value = commitment.hash;
+    $("creation-hash-status").textContent = "Metadata hash calculated. It will be recorded when you create the token.";
+  } catch (error) {
+    $("creation-hash").value = "";
+    $("creation-hash-status").textContent = `Complete the asset fields and valid metadata: ${error.message}`;
+  }
+});
 
 function clearHistory() {
   history = undefined;
@@ -108,15 +178,19 @@ async function run(action) {
   }
 }
 
-function show(data) {
-  if (current?.address !== data.address || current?.chainId !== data.chainId) {
-    $("asset-description").value = "";
-    $("asset-metadata").value = "{}";
-  }
-  if (data.database && current?.database !== data.database) {
-    $("asset-description").value = data.database.description;
-    $("asset-metadata").value = JSON.stringify(data.database.metadata, null, 2);
-  }
+function show(data, previous = current) {
+  let storage;
+  try { storage = window.localStorage; } catch { /* Browser storage may be blocked. */ }
+  let creationDocument;
+  try {
+    creationDocument = creationMetadata(Object.fromEntries(new FormData($("create-form"))), $("creation-description").value, $("creation-metadata").value).record;
+  } catch { /* The creation form may be empty when looking up an existing token. */ }
+  const metadata = metadataState(data, previous, {
+    description: $("asset-description").value, metadataText: $("asset-metadata").value, creationDocument
+  }, storage);
+  data = metadata.data;
+  $("asset-description").value = metadata.description;
+  $("asset-metadata").value = metadata.metadataText;
   current = data;
   $("mint-result").textContent = "Asset loaded. You can now check extra mint rejection. No wallet popup is expected.";
   const amount = (value) => `${formatUnits(value, data.decimals)} ${data.symbol}`;
@@ -148,6 +222,7 @@ function show(data) {
     for (const [label, value] of Object.entries({
       "Database asset": data.database.asset_id,
       "Saved description": data.database.description,
+      "Saved valuation": `${data.database.valuation} ${data.database.currency}`,
       "Saved metadata": JSON.stringify(data.database.metadata, null, 2)
     })) {
       const dt = document.createElement("dt"), dd = document.createElement("dd");
@@ -157,6 +232,8 @@ function show(data) {
     }
     $("database-status").textContent = "Asset loaded from PostgreSQL. Token details and balances read from its linked blockchain contract.";
   }
+  $("draft-integrity").textContent = "";
+  showIntegrity(data);
 }
 
 async function loadDatabaseAsset(assetId, updateRoute = true) {
@@ -168,6 +245,7 @@ async function loadDatabaseAsset(assetId, updateRoute = true) {
   $("result").replaceChildren();
   $("database-details").replaceChildren();
   $("database-form").hidden = true;
+  clearIntegrity();
   $("database-status").textContent = "Loading the saved asset from PostgreSQL...";
   try {
     const record = await fetchAssetRecord(assetId, $("chain").value);
@@ -203,20 +281,28 @@ $("create-form").onsubmit = (event) => {
   event.preventDefault();
   run(async () => {
     const ctx = await context();
-    const args = creationArgs(Object.fromEntries(new FormData(event.target)));
+    const values = Object.fromEntries(new FormData(event.target));
+    const commitment = creationMetadata(values, $("creation-description").value, $("creation-metadata").value);
+    const args = creationArgs({ ...values, documentHash: commitment.hash });
+    $("creation-hash").value = commitment.hash;
     const factory = new Contract(ctx.factory, factoryABI, ctx.signer);
     $("status").textContent = "Confirm token creation in your wallet…";
     const tx = await factory.createAssetToken(...args);
     $("status").textContent = `Submitted: ${tx.hash}. Waiting for confirmation…`;
     const receipt = await tx.wait();
     const { event: creation } = createdEvent(receipt, ctx.factory);
+    // Save the original document even if the subsequent RPC read fails or the
+    // wallet changed while waiting for confirmation.
+    let storage;
+    try { storage = window.localStorage; } catch {}
+    rememberMetadata({ chainId: ctx.chainId, address: creation.args.tokenAddress }, commitment.record, storage);
     if (ctx.generation !== generation) throw new Error(`Transaction confirmed: ${receipt.hash}. Reconnect on its original network and look up the asset.`);
     $("lookup-id").value = args[3];
     $("status").textContent = `Created ${creation.args.tokenAddress}. Transaction: ${receipt.hash}`;
     try {
       const data = await readToken(ctx.provider, ctx.factory, args[3], receipt, await ctx.signer.getAddress());
       if (ctx.generation === generation) {
-        show(data);
+        show({ ...data, creationDocument: commitment.record });
         await loadHistory(ctx, data);
       }
     } catch (error) {
@@ -229,23 +315,25 @@ $("lookup-form").onsubmit = (event) => {
   event.preventDefault();
   run(async () => {
     const ctx = await context();
+    const previous = current;
     current = undefined;
     clearTransfer();
     clearHistory();
     $("database-form").hidden = true;
     $("database-details").replaceChildren();
+    clearIntegrity();
     $("mint-result").textContent = "Loading asset. Wait for lookup to finish before running the simulation.";
     $("result").replaceChildren();
     const data = await readToken(ctx.provider, ctx.factory, $("lookup-id").value.trim(), undefined, await ctx.signer.getAddress());
     if (ctx.generation !== generation) throw new Error("Connection changed. Reconnect and retry.");
-    show(data);
+    show(data, previous);
     window.history.replaceState({}, "", "/");
     await loadHistory(ctx, data);
     $("status").textContent = "Token details and balances retrieved from the blockchain.";
   });
 };
 
-$("mint-check").onclick = () => run(async () => {
+$("mint-check")?.addEventListener("click", () => run(async () => {
   const startedAt = generation;
   $("mint-result").textContent = "Checking extra mint rejection with your wallet's RPC. No wallet approval is needed...";
   try {
@@ -265,7 +353,7 @@ $("mint-check").onclick = () => run(async () => {
     }
     throw error;
   }
-});
+}));
 
 $("transfer-form").onsubmit = (event) => {
   event.preventDefault();
@@ -353,6 +441,33 @@ $("database-form").onsubmit = (event) => {
 };
 
 $("lookup-db").onclick = () => run(() => loadDatabaseAsset($("lookup-id").value.trim()));
+$("verify-saved").onclick = () => run(async () => {
+  if (!current?.database) throw new Error("Load a saved asset first.");
+  await loadDatabaseAsset(current.database.asset_id, false);
+});
+$("verify-draft").onclick = () => run(async () => {
+  if (!current) throw new Error("Look up an asset first.");
+  const check = verifyMetadata({
+    ...(current.database || assetRecord(current, $("asset-description").value, $("asset-metadata").value)),
+    description: $("asset-description").value.trim(), metadata: parseMetadata($("asset-metadata").value)
+  }, current.asset.documentHash);
+  $("draft-integrity").className = `integrity-${check.status}`;
+  $("draft-integrity").textContent = check.status === "verified"
+    ? "Unsaved draft matches the on-chain hash."
+    : check.status === "unanchored" ? "This token has no on-chain metadata commitment."
+    : "Unsaved draft differs from the on-chain hash. The saved database record has not been changed.";
+  $("status").textContent = $("draft-integrity").textContent;
+});
+for (const id of ["asset-description", "asset-metadata"]) {
+  $(id).addEventListener("input", () => {
+    $("draft-integrity").className = "";
+    $("draft-integrity").textContent = "Edits are unsaved. Preview their integrity or download the edited record.";
+    if (current && !current.database) {
+      current.metadataAvailable = true;
+      showIntegrity(current);
+    }
+  });
+}
 window.addEventListener("popstate", () => {
   const route = assetRoute(window.location);
   if (route) {

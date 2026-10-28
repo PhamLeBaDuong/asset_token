@@ -52,7 +52,8 @@ Balance refreshes preserve the loaded database record.
 
 This API supports reads. Changes to description/metadata are still downloaded
 and imported using step 5. It does not automatically save form edits or upload
-documents. Document hashing and integrity verification remain steps 7 and 8.
+documents. Document hashing and integrity verification are implemented in the
+frontend for steps 7 and 8; see [the demo guide](../docs/checkpoint-2-demo.md).
 
 ## Endpoints and checks
 
