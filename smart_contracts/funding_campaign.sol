@@ -4,9 +4,10 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @notice One funding round for an existing asset token.
-/// @dev Escrows tokens and contributions; settlement and refunds are added next.
+/// @dev Escrows funding and supports successful settlement; refunds are added next.
 contract FundingCampaign is ReentrancyGuard {
     using SafeERC20 for IERC20;
     enum CampaignState { Setup, Active, Successful, Failed, Settled }
@@ -20,6 +21,10 @@ contract FundingCampaign is ReentrancyGuard {
     CampaignState public state;
     uint256 public totalRaised;
     mapping(address => uint256) public contributions;
+    mapping(address => bool) public tokensClaimed;
+    uint256 public claimedContributions;
+    uint256 public totalTokensClaimed;
+    bool public remainderReclaimed;
 
     error InvalidAssetToken();
     error InvalidFundingGoal();
@@ -31,10 +36,17 @@ contract FundingCampaign is ReentrancyGuard {
     error IncorrectEscrowAmount();
     error ZeroContribution();
     error FundingCapExceeded();
+    error EtherTransferFailed();
+    error NothingToClaim();
+    error AlreadyClaimed();
+    error ClaimsOutstanding();
 
     event CampaignActivated(address indexed issuer, uint256 offeredTokens);
     event ContributionReceived(address indexed contributor, uint256 amount, uint256 totalRaised);
     event CampaignSuccessful(uint256 totalRaised);
+    event CampaignSettled(address indexed issuer, uint256 amount);
+    event TokensClaimed(address indexed contributor, uint256 amount);
+    event RemainderReclaimed(uint256 amount);
 
     constructor(
         address assetToken_,
@@ -90,5 +102,50 @@ contract FundingCampaign is ReentrancyGuard {
             state = CampaignState.Successful;
             emit CampaignSuccessful(totalRaised);
         }
+    }
+
+    /// @notice Pay successful funding to the issuer once.
+    function settle() external nonReentrant {
+        require(msg.sender == issuer, OnlyIssuer());
+        require(state == CampaignState.Successful, InvalidState());
+
+        state = CampaignState.Settled;
+        (bool sent, ) = payable(issuer).call{value: totalRaised}("");
+        require(sent, EtherTransferFailed());
+        emit CampaignSettled(issuer, totalRaised);
+    }
+
+    /// @notice Proportional allocation in token base units, rounded down.
+    function tokenAllocation(address contributor) public view returns (uint256) {
+        return Math.mulDiv(contributions[contributor], offeredTokens, fundingGoal);
+    }
+
+    /// @notice Investors individually collect tokens after successful settlement.
+    function claimTokens() external nonReentrant {
+        require(state == CampaignState.Settled, InvalidState());
+        uint256 contribution = contributions[msg.sender];
+        require(contribution > 0, NothingToClaim());
+        require(!tokensClaimed[msg.sender], AlreadyClaimed());
+
+        uint256 allocation = tokenAllocation(msg.sender);
+        // Record the claim before transferring. Failed transfers roll this back.
+        tokensClaimed[msg.sender] = true;
+        claimedContributions += contribution;
+        totalTokensClaimed += allocation;
+        if (allocation > 0) assetToken.safeTransfer(msg.sender, allocation);
+        emit TokensClaimed(msg.sender, allocation);
+    }
+
+    /// @notice Return rounding dust only after every investor has claimed.
+    function reclaimRemainder() external nonReentrant {
+        require(msg.sender == issuer, OnlyIssuer());
+        require(state == CampaignState.Settled, InvalidState());
+        require(claimedContributions == totalRaised, ClaimsOutstanding());
+        require(!remainderReclaimed, AlreadyClaimed());
+
+        uint256 remainder = offeredTokens - totalTokensClaimed;
+        remainderReclaimed = true;
+        if (remainder > 0) assetToken.safeTransfer(issuer, remainder);
+        emit RemainderReclaimed(remainder);
     }
 }

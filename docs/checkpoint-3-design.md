@@ -149,7 +149,33 @@ node --test --test-isolation=none test/funding-campaign.test.js
 node --test --test-isolation=none test/*.test.js
 ```
 
+## Step 5: successful settlement and token claims implemented
+
+Only the issuer can call `settle()`, and only in Successful. It records Settled
+and transfers totalRaised to the issuer. A failed payment rolls back settlement
+so it can be retried. Reentrancy protection prevents nested withdrawals.
+
+After settlement, each contributor calls `claimTokens()` once. `tokenAllocation`
+uses Math.mulDiv for proportional allocation with rounding down, avoiding
+intermediate multiplication overflow. Original contribution amounts remain
+available for history; a separate flag records each completed token claim.
+
+`reclaimRemainder()` returns any rounding dust to the issuer once, only after
+all contributions have been accounted for by completed token claims. Even an
+allocation rounding down to zero can complete its claim. No investor loop is
+required for settlement, claims, or remainder recovery.
+
+Tests cover exact issuer payment including gas accounting, early/unauthorized/
+repeated settlement, individual allocations, non-contributors, duplicate claims,
+rounding, rejected issuer payments, and an issuer callback attempting reentrancy.
+
+Suggested commit message:
+
+```text
+feat: settle successful campaigns and support investor token claims
+```
+
 ## Next step
 
-Implement successful settlement to the issuer and individual investor token
-claims, including rejection of early settlement and duplicate claims.
+Implement deadline-based failure finalization, individual refunds, and return of
+failed-campaign escrow to the issuer.

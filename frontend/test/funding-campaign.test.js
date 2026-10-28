@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import solc from "solc";
 import { network } from "hardhat";
-import { BrowserProvider, ContractFactory, ZeroAddress, ZeroHash, parseEther, parseUnits } from "ethers";
+import { BrowserProvider, Contract, ContractFactory, ZeroAddress, ZeroHash, parseEther, parseUnits } from "ethers";
 
 const require = createRequire(import.meta.url);
 let compiled;
@@ -13,6 +13,9 @@ function compile() {
   if (compiled) return compiled;
   const sources = Object.fromEntries(["funding_campaign.sol", "asset_token.sol"].map((name) =>
     [name, { content: readFileSync(new URL(`../../smart_contracts/${name}`, import.meta.url), "utf8") }]));
+  sources["funding_issuer.sol"] = {
+    content: readFileSync(new URL("./fixtures/funding_issuer.sol", import.meta.url), "utf8")
+  };
   const output = JSON.parse(solc.compile(JSON.stringify({
     language: "Solidity", sources,
     settings: {
@@ -26,10 +29,99 @@ function compile() {
   assert.deepEqual((output.errors || []).filter((error) => error.severity === "error"), []);
   compiled = {
     campaign: output.contracts["funding_campaign.sol"].FundingCampaign,
-    token: output.contracts["asset_token.sol"].AssetToken
+    token: output.contracts["asset_token.sol"].AssetToken,
+    issuer: output.contracts["funding_issuer.sol"].FundingIssuer
   };
   return compiled;
 }
+
+test("Checkpoint 3: rounding and settlement payment safety", async (t) => {
+  const artifacts = compile();
+  const connection = await network.connect();
+  const provider = new BrowserProvider(connection.provider, undefined, { cacheTimeout: -1 });
+  try {
+    const issuer = await provider.getSigner(0);
+    const alice = await provider.getSigner(1);
+    const bob = await provider.getSigner(2);
+    const tokenFactory = new ContractFactory(artifacts.token.abi, artifacts.token.evm.bytecode.object, issuer);
+    const token = await tokenFactory.deploy(issuer.address, "Coffee", "COF", 100000n,
+      "rounding", "Coffee", "Business", 1n, "USD", "urn:rounding", ZeroHash);
+    await token.waitForDeployment();
+    const deadline = BigInt((await provider.getBlock("latest")).timestamp) + 86400n;
+    const factory = new ContractFactory(artifacts.campaign.abi, artifacts.campaign.evm.bytecode.object, issuer);
+
+    for (const offered of [10n, 1n]) {
+      await t.test(`rounding with ${offered} token base units preserves claims and returns dust once`, async () => {
+        const campaign = await factory.deploy(await token.getAddress(), 3n, deadline, offered);
+        await campaign.waitForDeployment();
+        const address = await campaign.getAddress();
+        await (await token.approve(address, offered)).wait();
+        await (await campaign.activate()).wait();
+        await (await campaign.connect(alice).contribute({ value: 1n })).wait();
+        await (await campaign.connect(bob).contribute({ value: 2n })).wait();
+        await (await campaign.settle()).wait();
+        assert.equal(await campaign.tokenAllocation(alice.address), offered / 3n);
+        assert.equal(await campaign.tokenAllocation(bob.address), offered * 2n / 3n);
+        const aliceBefore = await token.balanceOf(alice.address);
+        const bobBefore = await token.balanceOf(bob.address);
+        await (await campaign.connect(alice).claimTokens()).wait();
+        await assert.rejects(campaign.reclaimRemainder.staticCall(), (error) => {
+          assert.equal(error.revert.name, "ClaimsOutstanding"); return true;
+        });
+        await (await campaign.connect(bob).claimTokens()).wait();
+        assert.equal(await token.balanceOf(alice.address), aliceBefore + offered / 3n);
+        assert.equal(await token.balanceOf(bob.address), bobBefore + offered * 2n / 3n);
+        assert.equal(await campaign.claimedContributions(), 3n, "zero-token allocations still complete their claims");
+        assert.equal(await token.balanceOf(address), 1n);
+        await assert.rejects(campaign.connect(alice).reclaimRemainder.staticCall(), (error) => {
+          assert.equal(error.revert.name, "OnlyIssuer"); return true;
+        });
+        const before = await token.balanceOf(issuer.address);
+        await (await campaign.reclaimRemainder()).wait();
+        assert.equal(await token.balanceOf(issuer.address), before + 1n);
+        assert.equal(await token.balanceOf(address), 0n);
+        await assert.rejects(campaign.reclaimRemainder.staticCall(), (error) => {
+          assert.equal(error.revert.name, "AlreadyClaimed"); return true;
+        });
+      });
+    }
+
+    const receiver = await new ContractFactory(artifacts.issuer.abi, artifacts.issuer.evm.bytecode.object, issuer).deploy();
+    await receiver.waitForDeployment();
+    await (await token.transfer(await receiver.getAddress(), 10n)).wait();
+    await (await receiver.launch(await token.getAddress(), 3n, deadline, 10n)).wait();
+    const campaign = new Contract(await receiver.campaign(), artifacts.campaign.abi, alice);
+    await (await campaign.contribute({ value: 3n })).wait();
+
+    await t.test("rejected issuer payment rolls back settlement and leaves ETH locked", async () => {
+      await (await receiver.configure(true, false)).wait();
+      await assert.rejects(async () => {
+        await (await receiver.settle({ gasLimit: 500000 })).wait();
+      });
+      await assert.rejects(receiver.settle.staticCall(), (error) => {
+        assert.equal(campaign.interface.parseError(error.data).name, "EtherTransferFailed"); return true;
+      });
+      assert.equal(await campaign.state(), 2n);
+      assert.equal(await provider.getBalance(await campaign.getAddress()), 3n);
+      assert.equal(await provider.getBalance(await receiver.getAddress()), 0n);
+      assert.equal(await token.balanceOf(await campaign.getAddress()), 10n);
+    });
+
+    await t.test("issuer callback cannot reenter settlement; normal settlement succeeds once", async () => {
+      await (await receiver.configure(false, true)).wait();
+      await (await receiver.settle()).wait();
+      assert.equal(await receiver.reentryBlocked(), true);
+      assert.equal(await provider.getBalance(await receiver.getAddress()), 3n);
+      assert.equal(await provider.getBalance(await campaign.getAddress()), 0n);
+      assert.equal(await campaign.state(), 4n);
+      await (await campaign.claimTokens()).wait();
+      assert.equal(await token.balanceOf(await campaign.getAddress()), 0n);
+    });
+  } finally {
+    provider.destroy();
+    await connection.close();
+  }
+});
 
 test("Checkpoint 3: campaign configuration and escrow activation", async (t) => {
   const artifacts = compile();
@@ -177,7 +269,7 @@ test("Checkpoint 3: campaign configuration and escrow activation", async (t) => 
   }
 });
 
-test("Checkpoint 3: multiple contributors and funding cap", async (t) => {
+test("Checkpoint 3: multiple contributors, funding cap, settlement, and claims", async (t) => {
   const artifacts = compile();
   const connection = await network.connect();
   const provider = new BrowserProvider(connection.provider, undefined, { cacheTimeout: -1 });
@@ -214,6 +306,10 @@ test("Checkpoint 3: multiple contributors and funding cap", async (t) => {
 
     await t.test("rejects zero contributions", async () => {
       await assert.rejects(campaign.connect(alice).contribute.staticCall(), revertsWith("ZeroContribution"));
+    });
+
+    await t.test("issuer cannot settle before reaching the goal", async () => {
+      await assert.rejects(campaign.settle.staticCall(), revertsWith("InvalidState"));
     });
 
     await t.test("records repeated contributions and emits the payment event", async () => {
@@ -275,6 +371,60 @@ test("Checkpoint 3: multiple contributors and funding cap", async (t) => {
     await t.test("ordinary ETH transfers cannot bypass contribution accounting", async () => {
       await assert.rejects(provider.call({ from: alice.address, to: address, value: 1n }));
       assert.equal(await provider.getBalance(address), parseEther("1"));
+    });
+
+    await t.test("successful campaign blocks token claims until settlement", async () => {
+      await assert.rejects(campaign.connect(alice).claimTokens.staticCall(), revertsWith("InvalidState"));
+      assert.equal(await campaign.tokenAllocation(alice.address), parseUnits("2000", 18));
+    });
+
+    await t.test("only issuer can settle", async () => {
+      await assert.rejects(campaign.connect(alice).settle.staticCall(), revertsWith("OnlyIssuer"));
+      assert.equal(await provider.getBalance(address), parseEther("1"));
+    });
+
+    await t.test("settlement pays exactly the funding goal and preserves escrow", async () => {
+      const before = await provider.getBalance(issuer.address);
+      const receipt = await (await campaign.settle()).wait();
+      assert.equal(await provider.getBalance(issuer.address), before + parseEther("1") - receipt.fee);
+      assert.equal(await provider.getBalance(address), 0n);
+      assert.equal(await campaign.state(), 4n); // Settled
+      assert.equal(await campaign.totalRaised(), parseEther("1"));
+      assert.equal(await token.balanceOf(address), parseUnits("10000", 18));
+      const event = campaign.interface.parseLog(receipt.logs[0]);
+      assert.equal(event.name, "CampaignSettled");
+      assert.equal(event.args.amount, parseEther("1"));
+    });
+
+    await t.test("settlement cannot run twice and further contributions remain blocked", async () => {
+      await assert.rejects(campaign.settle.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.connect(alice).contribute.staticCall({ value: 1n }), revertsWith("InvalidState"));
+    });
+
+    await t.test("non-contributor cannot claim tokens", async () => {
+      await assert.rejects(campaign.claimTokens.staticCall(), revertsWith("NothingToClaim"));
+    });
+
+    await t.test("issuer cannot reclaim tokens while investor claims are outstanding", async () => {
+      await assert.rejects(campaign.reclaimRemainder.staticCall(), revertsWith("ClaimsOutstanding"));
+    });
+
+    await t.test("investors receive 2,000, 3,000, and 5,000 tokens in separate claims", async () => {
+      for (const [investor, tokens] of [[alice, "2000"], [bob, "3000"], [carol, "5000"]]) {
+        const contribution = await campaign.contributions(investor.address);
+        const receipt = await (await campaign.connect(investor).claimTokens()).wait();
+        assert.equal(await token.balanceOf(investor.address), parseUnits(tokens, 18));
+        assert.equal(await campaign.tokensClaimed(investor.address), true);
+        assert.equal(await campaign.contributions(investor.address), contribution, "retain original contribution history");
+        const event = campaign.interface.parseLog(receipt.logs.find((log) => log.address.toLowerCase() === address.toLowerCase()));
+        assert.equal(event.name, "TokensClaimed");
+        assert.equal(event.args.contributor, investor.address);
+        assert.equal(event.args.amount, parseUnits(tokens, 18));
+        await assert.rejects(campaign.connect(investor).claimTokens.staticCall(), revertsWith("AlreadyClaimed"));
+      }
+      assert.equal(await token.balanceOf(address), 0n);
+      assert.equal(await campaign.claimedContributions(), parseEther("1"));
+      assert.equal(await campaign.totalTokensClaimed(), parseUnits("10000", 18));
     });
 
     await t.test("rejects contributions at and after the deadline while below goal", async () => {
