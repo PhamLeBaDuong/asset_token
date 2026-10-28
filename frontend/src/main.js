@@ -4,6 +4,7 @@ import { assetRecord } from "./asset-record.js";
 import { fetchAssetRecord, assetRoute } from "./database-api.js";
 import { creationMetadata, parseMetadata, verifyMetadata } from "./metadata-integrity.js";
 import { metadataState, rememberMetadata } from "./metadata-state.js";
+import { mountFundingUI } from "./funding-ui.js";
 import "./style.css";
 
 const $ = (id) => document.getElementById(id);
@@ -19,6 +20,7 @@ let history;
 
 function reset() {
   generation++;
+  fundingUI.reset();
   provider = signer = current = undefined;
   $("result").replaceChildren();
   clearTransfer();
@@ -192,6 +194,7 @@ function show(data, previous = current) {
   $("asset-description").value = metadata.description;
   $("asset-metadata").value = metadata.metadataText;
   current = data;
+  fundingUI.setAsset(data);
   $("mint-result").textContent = "Asset loaded. You can now check extra mint rejection. No wallet popup is expected.";
   const amount = (value) => `${formatUnits(value, data.decimals)} ${data.symbol}`;
   const rows = {
@@ -240,6 +243,7 @@ async function loadDatabaseAsset(assetId, updateRoute = true) {
   if (!provider || !signer) throw new Error("Connect your wallet first.");
   const startedAt = generation;
   current = undefined;
+  fundingUI.reset();
   clearTransfer();
   clearHistory();
   $("result").replaceChildren();
@@ -317,6 +321,7 @@ $("lookup-form").onsubmit = (event) => {
     const ctx = await context();
     const previous = current;
     current = undefined;
+    fundingUI.reset();
     clearTransfer();
     clearHistory();
     $("database-form").hidden = true;
@@ -399,6 +404,7 @@ $("transfer-form").onsubmit = (event) => {
     } catch (error) {
       if (ctx.generation === generation) {
         current = undefined;
+        fundingUI.reset();
         $("transfer-form").hidden = true;
         $("transfer-summary").textContent = "Transfer confirmed. Look up the asset again to refresh balances.";
       }
@@ -477,5 +483,22 @@ window.addEventListener("popstate", () => {
       reset();
     }
     if (provider && signer) run(() => loadDatabaseAsset(route.assetId, false));
+  }
+});
+
+let campaignStorage;
+try { campaignStorage = window.localStorage; } catch { /* Browser storage may be blocked. */ }
+const fundingUI = mountFundingUI({
+  document, storage: campaignStorage, getContext: context, run,
+  setStatus: (message) => { $("status").textContent = message; },
+  refreshAsset: async (ctx, asset, minimumBlock) => {
+    if (ctx.generation !== generation || current?.address !== asset.address) throw new Error("Connection changed.");
+    const wallet = await ctx.signer.getAddress();
+    const data = asset.database
+      ? await readLinkedToken(ctx.provider, asset.database, wallet, minimumBlock)
+      : await readToken(ctx.provider, ctx.factory, asset.asset.assetId, undefined, wallet, minimumBlock);
+    if (ctx.generation !== generation || current?.address !== asset.address) throw new Error("Connection changed.");
+    show(data);
+    await loadHistory(ctx, data);
   }
 });

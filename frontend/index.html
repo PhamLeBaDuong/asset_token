@@ -93,6 +93,46 @@
         <details id="integrity-canonical" hidden><summary>Canonical document used for verification</summary><pre id="integrity-document"></pre></details>
         <p class="hint">Verification checks that the document matches the recorded hash. It does not establish whether the document's business claims are true.</p>
       </section>
+      <section aria-labelledby="campaign-title">
+        <h2 id="campaign-title">8. Funding campaigns</h2>
+        <p id="campaign-summary">Look up an asset to create or load a funding campaign.</p>
+        <div id="campaign-controls" hidden>
+          <form id="campaign-create-form" hidden>
+            <h3>Create a funding round</h3>
+            <div class="grid">
+              <label>Funding goal / hard cap (ETH)<input id="campaign-goal" required inputmode="decimal" placeholder="0.01" /></label>
+              <label>Tokens offered<input id="campaign-offered" required inputmode="decimal" placeholder="10000" /></label>
+            </div>
+            <label>Deadline (your local time)<input id="campaign-deadline" type="datetime-local" required /></label>
+            <p class="hint">The campaign closes as soon as the goal is reached. Tokens stay reserved until successful claims or return after failure. Creating a campaign is followed by separate approval and activation transactions.</p>
+            <button type="submit">Create campaign</button>
+          </form>
+          <form id="campaign-load-form">
+            <label>Campaign address<input id="campaign-address" required list="campaign-saved" placeholder="Paste a campaign address, or choose one saved in this browser" autocomplete="off" /></label>
+            <datalist id="campaign-saved"></datalist>
+            <button type="submit">Load / refresh campaign</button>
+          </form>
+          <p class="hint">Share this address with investors. Saved addresses belong to this browser and network; campaign balances and state come from the blockchain.</p>
+          <progress id="campaign-progress" aria-label="Funding progress" max="100" value="0" hidden></progress>
+          <dl id="campaign-details"></dl>
+          <p id="campaign-note" role="status" aria-live="polite"></p>
+          <div class="campaign-actions">
+            <button id="campaign-approve" type="button" hidden>1. Approve offered tokens</button>
+            <button id="campaign-activate" type="button" hidden>2. Deposit tokens &amp; activate</button>
+            <button id="campaign-finalize" type="button" hidden>Finalize failed campaign</button>
+            <button id="campaign-settle" type="button" hidden>Settle &amp; receive funding</button>
+            <button id="campaign-claimTokens" type="button" hidden>Claim your tokens</button>
+            <button id="campaign-claimRefund" type="button" hidden>Claim your refund</button>
+            <button id="campaign-reclaimFailedTokens" type="button" hidden>Reclaim offered tokens</button>
+            <button id="campaign-reclaimRemainder" type="button" hidden>Reclaim rounding remainder</button>
+          </div>
+          <form id="campaign-contribute-form" hidden>
+            <label>Contribution (ETH)<input id="campaign-amount" required inputmode="decimal" placeholder="0.002" /></label>
+            <p id="campaign-remaining" class="hint"></p>
+            <button type="submit">Contribute ETH</button>
+          </form>
+        </div>
+      </section>
       <p id="status" role="status" aria-live="polite">Connect a browser wallet on the same network as your factory.</p>
     </main>
     <script type="module" src="/src/main.js"></script>

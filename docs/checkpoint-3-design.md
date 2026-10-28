@@ -203,7 +203,34 @@ Suggested commit message:
 feat: finalize failed campaigns and support secure investor refunds
 ```
 
-## Next step
+## Step 7: asset integration and funding UI implemented
 
-Integrate campaigns with the existing tokenized assets and frontend, then prepare
-the successful and failed campaign demonstrations.
+The existing asset page now mounts a funding section for its factory-verified
+token. The original issuer can deploy a campaign using the generated ABI and
+bytecode, approve tokens, and activate. Investors load a shared campaign address.
+The UI checks the deployed runtime against compiled code (ignoring constructor
+immutable slots), token address, and original issuer before allowing interactions.
+
+The section shows goal, raised amount, progress, deadline, offered tokens, personal
+contribution, allocation, and refund status. It exposes actions based on wallet,
+state, and the latest read block's timestamp. Actions re-read campaign state before
+requesting a wallet transaction. Confirmed transactions refresh campaign and asset
+balances; switching wallet/network or asset clears the previous campaign view.
+
+Address discovery uses browser storage scoped by chain/token and a manually shared
+address, without database schema changes. The blockchain remains the source of
+campaign state. The API is optional for funding. Existing tokens and factories
+do not require redeployment.
+
+`npm run dev`, `npm test`, and `npm run build` regenerate the browser artifact from
+the Solidity source. UI tests use real local contracts and a small DOM adapter to
+exercise successful and failed rounds, all four wallet roles, balance refreshes,
+address validation, and reset behavior. This does not replace live wallet rehearsal.
+
+See [checkpoint-3-demo.md](checkpoint-3-demo.md) for demo instructions.
+
+Suggested commit message:
+
+```text
+feat: integrate asset funding campaigns into the wallet frontend
+```

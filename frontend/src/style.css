@@ -23,6 +23,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
 .integrity-failed { color: #a52222; font-weight: 700; }
 .integrity-unanchored { color: #765313; font-weight: 700; }
 .table-scroll { overflow-x: auto; }
+.campaign-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.campaign-actions [hidden] { display: none; }
+#campaign-load-form { margin-top: 24px; }
+#campaign-progress { width: 100%; height: 20px; accent-color: #17665e; }
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { padding: 10px; text-align: left; vertical-align: top; border-bottom: 1px solid #dce4e9; }
 td { overflow-wrap: anywhere; min-width: 150px; max-width: 250px; }

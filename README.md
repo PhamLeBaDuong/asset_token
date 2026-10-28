@@ -4,6 +4,8 @@ The minimal wallet-connected frontend, setup instructions, minting explanation,
 and automated blockchain tests are in [frontend/README.md](frontend/README.md).
 The complete Checkpoint 2 demo and speaking notes are in
 [docs/checkpoint-2-demo.md](docs/checkpoint-2-demo.md).
+The funding campaign walkthrough for Checkpoint 3 is in
+[docs/checkpoint-3-demo.md](docs/checkpoint-3-demo.md).
 
 ```powershell
 cd frontend

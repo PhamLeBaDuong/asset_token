@@ -4,9 +4,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "compile:funding": "node scripts/build-funding-contract.mjs",
+    "predev": "npm run compile:funding",
     "dev": "vite --host 127.0.0.1",
+    "prebuild": "npm run compile:funding",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "pretest": "npm run compile:funding",
     "test": "node --test test/*.test.js"
   },
   "dependencies": { "ethers": "^6.16.0" },

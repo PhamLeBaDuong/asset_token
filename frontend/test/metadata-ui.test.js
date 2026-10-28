@@ -8,6 +8,7 @@ import * as integrity from "../src/metadata-integrity.js";
 import { assetRecord } from "../src/asset-record.js";
 import { metadataState, rememberMetadata } from "../src/metadata-state.js";
 import { assetRoute } from "../src/database-api.js";
+import { mountFundingUI } from "../src/funding-ui.js";
 
 const factory = "0x" + "1".repeat(40), token = "0x" + "2".repeat(40), issuer = "0x" + "3".repeat(40);
 const fields = {
@@ -55,7 +56,7 @@ function harness(storage = memoryStorage(), formFields = fields) {
   const provider = { getCode: async () => "0x1234", getNetwork: async () => ({ chainId: 31337n }) };
   const signer = { getAddress: async () => ethers.getAddress(issuer) };
   const context = vm.createContext({
-    ...ethers, ...contracts, ...integrity, Contract: WalletContract, assetRecord, metadataState, rememberMetadata, assetRoute,
+    ...ethers, ...contracts, ...integrity, Contract: WalletContract, assetRecord, metadataState, rememberMetadata, assetRoute, mountFundingUI,
     createdEvent: () => ({ event: { args: { tokenAddress: token } } }),
     readToken: async () => ({ ...base }),
     readTransferHistory: async () => ({ entries: [], fromBlock: 2, toBlock: 2, nextToBlock: null }),

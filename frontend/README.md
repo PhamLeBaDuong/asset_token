@@ -17,6 +17,39 @@ ID and an already deployed factory address, then complete the asset form. Option
 defaults can be set by copying `.env.example` to `.env` and restarting Vite.
 These settings are public configuration, not secrets.
 
+## Checkpoint 3 funding campaigns
+
+After creating or looking up an asset, scroll to **8. Funding campaigns**.
+The original asset issuer can enter an ETH goal, offered token amount, and future
+deadline, then click **Create campaign**. Confirm three separate transactions:
+creation, **Approve offered tokens**, and **Deposit tokens & activate**.
+
+Share the displayed campaign address with investors. Each investor connects their
+wallet on the same chain, looks up the same asset, pastes the campaign address,
+and clicks **Load / refresh campaign**. They can then contribute ETH up to the
+remaining goal. Reaching the goal ends fundraising immediately.
+
+After success, the issuer clicks **Settle & receive funding**. Investors then
+click **Claim your tokens** from their own wallets. If the deadline passes below
+the goal, anyone can click **Finalize failed campaign**, investors can claim
+refunds, and the issuer can reclaim the offered tokens.
+
+Balances and available actions refresh after confirmed transactions. Use **Load /
+refresh campaign** to see another wallet's transactions or a newly passed deadline.
+Saved campaign addresses are scoped to token and chain in this browser; paste
+the shared address when using another browser. Campaign state and balances are
+stored on chain. Funding does not require the database API.
+
+`npm run dev`, `npm test`, and `npm run build` first compile the campaign using
+the installed Solidity compiler. The generated browser artifact contains the ABI,
+deployment bytecode, and runtime verification data. Run `npm run compile:funding`
+after editing Solidity if invoking individual test files directly. The UI verifies
+the campaign's compiled runtime code, asset token, and original issuer before
+allowing approval or contributions. Existing asset tokens/factories do not need
+redeployment; each new campaign is a separate contract.
+
+See [the Checkpoint 3 demo](../docs/checkpoint-3-demo.md) for both browser stories.
+
 ## Deploy a factory first
 
 For a first demo, compile `smart_contracts/asset_factory.sol` in Remix using
