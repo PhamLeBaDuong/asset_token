@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @notice One funding round for an existing asset token.
-/// @dev Escrows funding and supports successful settlement; refunds are added next.
+/// @dev Escrows funding for successful settlement or individual failure refunds.
 contract FundingCampaign is ReentrancyGuard {
     using SafeERC20 for IERC20;
     enum CampaignState { Setup, Active, Successful, Failed, Settled }
@@ -25,6 +25,9 @@ contract FundingCampaign is ReentrancyGuard {
     uint256 public claimedContributions;
     uint256 public totalTokensClaimed;
     bool public remainderReclaimed;
+    mapping(address => bool) public refundClaimed;
+    uint256 public totalRefunded;
+    bool public escrowReturned;
 
     error InvalidAssetToken();
     error InvalidFundingGoal();
@@ -40,6 +43,7 @@ contract FundingCampaign is ReentrancyGuard {
     error NothingToClaim();
     error AlreadyClaimed();
     error ClaimsOutstanding();
+    error DeadlineNotReached();
 
     event CampaignActivated(address indexed issuer, uint256 offeredTokens);
     event ContributionReceived(address indexed contributor, uint256 amount, uint256 totalRaised);
@@ -47,6 +51,9 @@ contract FundingCampaign is ReentrancyGuard {
     event CampaignSettled(address indexed issuer, uint256 amount);
     event TokensClaimed(address indexed contributor, uint256 amount);
     event RemainderReclaimed(uint256 amount);
+    event CampaignFailed(uint256 totalRaised);
+    event RefundClaimed(address indexed contributor, uint256 amount);
+    event EscrowReturned(address indexed issuer, uint256 amount);
 
     constructor(
         address assetToken_,
@@ -113,6 +120,39 @@ contract FundingCampaign is ReentrancyGuard {
         (bool sent, ) = payable(issuer).call{value: totalRaised}("");
         require(sent, EtherTransferFailed());
         emit CampaignSettled(issuer, totalRaised);
+    }
+
+    /// @notice Record failure after an underfunded campaign's deadline.
+    /// @dev Anyone may finalize so investors do not depend on the issuer.
+    function finalizeCampaign() external nonReentrant {
+        require(state == CampaignState.Active, InvalidState());
+        require(block.timestamp >= deadline, DeadlineNotReached());
+        state = CampaignState.Failed;
+        emit CampaignFailed(totalRaised);
+    }
+
+    /// @notice Return a failed campaign's contribution to its original sender.
+    function claimRefund() external nonReentrant {
+        require(state == CampaignState.Failed, InvalidState());
+        uint256 amount = contributions[msg.sender];
+        require(amount > 0, NothingToClaim());
+        require(!refundClaimed[msg.sender], AlreadyClaimed());
+
+        refundClaimed[msg.sender] = true;
+        totalRefunded += amount;
+        (bool sent, ) = payable(msg.sender).call{value: amount}("");
+        require(sent, EtherTransferFailed());
+        emit RefundClaimed(msg.sender, amount);
+    }
+
+    /// @notice Return offered tokens after failure without affecting ETH refunds.
+    function reclaimFailedTokens() external nonReentrant {
+        require(msg.sender == issuer, OnlyIssuer());
+        require(state == CampaignState.Failed, InvalidState());
+        require(!escrowReturned, AlreadyClaimed());
+        escrowReturned = true;
+        assetToken.safeTransfer(issuer, offeredTokens);
+        emit EscrowReturned(issuer, offeredTokens);
     }
 
     /// @notice Proportional allocation in token base units, rounded down.

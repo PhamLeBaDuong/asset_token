@@ -16,6 +16,9 @@ function compile() {
   sources["funding_issuer.sol"] = {
     content: readFileSync(new URL("./fixtures/funding_issuer.sol", import.meta.url), "utf8")
   };
+  sources["refund_contributor.sol"] = {
+    content: readFileSync(new URL("./fixtures/refund_contributor.sol", import.meta.url), "utf8")
+  };
   const output = JSON.parse(solc.compile(JSON.stringify({
     language: "Solidity", sources,
     settings: {
@@ -30,10 +33,178 @@ function compile() {
   compiled = {
     campaign: output.contracts["funding_campaign.sol"].FundingCampaign,
     token: output.contracts["asset_token.sol"].AssetToken,
-    issuer: output.contracts["funding_issuer.sol"].FundingIssuer
+    issuer: output.contracts["funding_issuer.sol"].FundingIssuer,
+    refundContributor: output.contracts["refund_contributor.sol"].RefundContributor
   };
   return compiled;
 }
+
+test("Checkpoint 3: failed campaigns, refunds, and refund payment safety", async (t) => {
+  const artifacts = compile();
+  const connection = await network.connect();
+  const provider = new BrowserProvider(connection.provider, undefined, { cacheTimeout: -1 });
+  try {
+    const issuer = await provider.getSigner(0);
+    const alice = await provider.getSigner(1);
+    const bob = await provider.getSigner(2);
+    const outsider = await provider.getSigner(3);
+    const token = await new ContractFactory(artifacts.token.abi, artifacts.token.evm.bytecode.object, issuer)
+      .deploy(issuer.address, "Coffee", "COF", 100000n,
+        "refunds", "Coffee", "Business", 1n, "USD", "urn:refunds", ZeroHash);
+    await token.waitForDeployment();
+    const factory = new ContractFactory(artifacts.campaign.abi, artifacts.campaign.evm.bytecode.object, issuer);
+    const offered = parseUnits("10000", 18);
+    const deadline = BigInt((await provider.getBlock("latest")).timestamp) + 86400n;
+    async function deployCampaign(end = deadline) {
+      const result = await factory.deploy(await token.getAddress(), parseEther("1"), end, offered);
+      await result.waitForDeployment();
+      return result;
+    }
+    async function activate(result) {
+      await (await token.approve(await result.getAddress(), offered)).wait();
+      await (await result.activate()).wait();
+    }
+    function revertsWith(name) {
+      return (error) => {
+        assert.equal(error.code, "CALL_EXCEPTION");
+        assert.equal(factory.interface.parseError(error.data).name, name);
+        return true;
+      };
+    }
+    const campaign = await deployCampaign();
+    const empty = await deployCampaign();
+    const setup = await deployCampaign();
+    const address = await campaign.getAddress();
+    await activate(campaign);
+    await activate(empty);
+    await (await campaign.connect(alice).contribute({ value: parseEther("0.2") })).wait();
+    await (await campaign.connect(bob).contribute({ value: parseEther("0.15") })).wait();
+
+    await t.test("active campaigns reject early finalization, refunds, and escrow return", async () => {
+      await assert.rejects(campaign.finalizeCampaign.staticCall(), revertsWith("DeadlineNotReached"));
+      await assert.rejects(campaign.connect(alice).claimRefund.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.reclaimFailedTokens.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.settle.staticCall(), revertsWith("InvalidState"));
+      assert.equal(await provider.getBalance(address), parseEther("0.35"));
+    });
+
+    await connection.provider.request({ method: "evm_setNextBlockTimestamp", params: [Number(deadline) - 1] });
+    await connection.provider.request({ method: "evm_mine", params: [] });
+    await t.test("finalization is rejected one second before the deadline", async () => {
+      await assert.rejects(campaign.finalizeCampaign.staticCall(), revertsWith("DeadlineNotReached"));
+    });
+
+    await t.test("any wallet can finalize failure exactly at the deadline without moving funds", async () => {
+      const before = await provider.getBalance(issuer.address);
+      await connection.provider.request({ method: "evm_setNextBlockTimestamp", params: [Number(deadline)] });
+      const receipt = await (await campaign.connect(outsider).finalizeCampaign()).wait();
+      assert.equal(BigInt((await provider.getBlock(receipt.blockNumber)).timestamp), deadline);
+      assert.equal(await campaign.state(), 3n); // Failed
+      assert.equal(await provider.getBalance(issuer.address), before);
+      assert.equal(await provider.getBalance(address), parseEther("0.35"));
+      assert.equal(await token.balanceOf(address), offered);
+      const event = campaign.interface.parseLog(receipt.logs[0]);
+      assert.equal(event.name, "CampaignFailed");
+      assert.equal(event.args.totalRaised, parseEther("0.35"));
+    });
+
+    await t.test("failed campaigns block settlement, contributions, token claims, and repeated finalization", async () => {
+      await assert.rejects(campaign.settle.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.contribute.staticCall({ value: 1n }), revertsWith("InvalidState"));
+      await assert.rejects(campaign.connect(alice).claimTokens.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.finalizeCampaign.staticCall(), revertsWith("InvalidState"));
+    });
+
+    await t.test("non-contributors cannot claim refunds and non-issuers cannot reclaim escrow", async () => {
+      await assert.rejects(campaign.connect(outsider).claimRefund.staticCall(), revertsWith("NothingToClaim"));
+      await assert.rejects(campaign.claimRefund.staticCall(), revertsWith("NothingToClaim"));
+      await assert.rejects(campaign.connect(alice).reclaimFailedTokens.staticCall(), revertsWith("OnlyIssuer"));
+    });
+
+    await t.test("Alice receives her 0.2 ETH once, with original contribution history preserved", async () => {
+      const before = await provider.getBalance(alice.address);
+      const receipt = await (await campaign.connect(alice).claimRefund()).wait();
+      assert.equal(await provider.getBalance(alice.address), before + parseEther("0.2") - receipt.fee);
+      assert.equal(await campaign.refundClaimed(alice.address), true);
+      assert.equal(await campaign.contributions(alice.address), parseEther("0.2"));
+      assert.equal(await campaign.totalRefunded(), parseEther("0.2"));
+      const event = campaign.interface.parseLog(receipt.logs[0]);
+      assert.equal(event.name, "RefundClaimed");
+      assert.equal(event.args.contributor, alice.address);
+      assert.equal(event.args.amount, parseEther("0.2"));
+      await assert.rejects(campaign.connect(alice).claimRefund.staticCall(), revertsWith("AlreadyClaimed"));
+    });
+
+    await t.test("issuer recovers offered tokens once without taking Bob's pending refund", async () => {
+      const before = await token.balanceOf(issuer.address);
+      const receipt = await (await campaign.reclaimFailedTokens()).wait();
+      assert.equal(await token.balanceOf(issuer.address), before + offered);
+      assert.equal(await token.balanceOf(address), 0n);
+      assert.equal(await campaign.escrowReturned(), true);
+      assert.equal(await provider.getBalance(address), parseEther("0.15"));
+      const event = campaign.interface.parseLog(receipt.logs.find((log) => log.address.toLowerCase() === address.toLowerCase()));
+      assert.equal(event.name, "EscrowReturned");
+      assert.equal(event.args.amount, offered);
+      await assert.rejects(campaign.reclaimFailedTokens.staticCall(), revertsWith("AlreadyClaimed"));
+    });
+
+    await t.test("Bob independently recovers 0.15 ETH after issuer reclaims tokens", async () => {
+      const before = await provider.getBalance(bob.address);
+      const receipt = await (await campaign.connect(bob).claimRefund()).wait();
+      assert.equal(await provider.getBalance(bob.address), before + parseEther("0.15") - receipt.fee);
+      assert.equal(await campaign.totalRefunded(), parseEther("0.35"));
+      assert.equal(await campaign.totalRaised(), parseEther("0.35"));
+      assert.equal(await provider.getBalance(address), 0n);
+      assert.equal(await campaign.state(), 3n);
+    });
+
+    await t.test("zero-contributor campaigns can fail and return escrow; Setup cannot finalize", async () => {
+      await (await empty.connect(outsider).finalizeCampaign()).wait();
+      await (await empty.reclaimFailedTokens()).wait();
+      assert.equal(await empty.state(), 3n);
+      assert.equal(await token.balanceOf(await empty.getAddress()), 0n);
+      await assert.rejects(setup.finalizeCampaign.staticCall(), revertsWith("InvalidState"));
+    });
+
+    const safetyDeadline = BigInt((await provider.getBlock("latest")).timestamp) + 86400n;
+    const safety = await deployCampaign(safetyDeadline);
+    await activate(safety);
+    const receiver = await new ContractFactory(artifacts.refundContributor.abi,
+      artifacts.refundContributor.evm.bytecode.object, issuer).deploy();
+    await receiver.waitForDeployment();
+    await (await receiver.contribute(await safety.getAddress(), { value: parseEther("0.2") })).wait();
+    await (await safety.connect(bob).contribute({ value: parseEther("0.15") })).wait();
+    await connection.provider.request({ method: "evm_setNextBlockTimestamp", params: [Number(safetyDeadline) + 1] });
+    await (await safety.finalizeCampaign()).wait();
+
+    await t.test("rejecting refund receiver preserves its claim and cannot block another investor", async () => {
+      await (await receiver.configure(true, false)).wait();
+      await assert.rejects(async () => {
+        await (await receiver.claimRefund({ gasLimit: 500000 })).wait();
+      });
+      await assert.rejects(receiver.claimRefund.staticCall(), revertsWith("EtherTransferFailed"));
+      assert.equal(await safety.refundClaimed(await receiver.getAddress()), false);
+      assert.equal(await safety.totalRefunded(), 0n);
+      assert.equal(await provider.getBalance(await safety.getAddress()), parseEther("0.35"));
+      await (await safety.connect(bob).claimRefund()).wait();
+      assert.equal(await safety.totalRefunded(), parseEther("0.15"));
+    });
+
+    await t.test("refund retry succeeds while nested refund withdrawal is blocked", async () => {
+      await (await receiver.configure(false, true)).wait();
+      await (await receiver.claimRefund()).wait();
+      assert.equal(await receiver.reentryBlocked(), true);
+      assert.equal(await safety.refundClaimed(await receiver.getAddress()), true);
+      assert.equal(await provider.getBalance(await receiver.getAddress()), parseEther("0.2"));
+      assert.equal(await provider.getBalance(await safety.getAddress()), 0n);
+      assert.equal(await safety.totalRefunded(), parseEther("0.35"));
+      await assert.rejects(receiver.claimRefund.staticCall(), revertsWith("AlreadyClaimed"));
+    });
+  } finally {
+    provider.destroy();
+    await connection.close();
+  }
+});
 
 test("Checkpoint 3: rounding and settlement payment safety", async (t) => {
   const artifacts = compile();
@@ -378,6 +549,12 @@ test("Checkpoint 3: multiple contributors, funding cap, settlement, and claims",
       assert.equal(await campaign.tokenAllocation(alice.address), parseUnits("2000", 18));
     });
 
+    await t.test("successful campaign cannot fail, refund, or return offered tokens", async () => {
+      await assert.rejects(campaign.finalizeCampaign.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.connect(alice).claimRefund.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.reclaimFailedTokens.staticCall(), revertsWith("InvalidState"));
+    });
+
     await t.test("only issuer can settle", async () => {
       await assert.rejects(campaign.connect(alice).settle.staticCall(), revertsWith("OnlyIssuer"));
       assert.equal(await provider.getBalance(address), parseEther("1"));
@@ -399,6 +576,9 @@ test("Checkpoint 3: multiple contributors, funding cap, settlement, and claims",
     await t.test("settlement cannot run twice and further contributions remain blocked", async () => {
       await assert.rejects(campaign.settle.staticCall(), revertsWith("InvalidState"));
       await assert.rejects(campaign.connect(alice).contribute.staticCall({ value: 1n }), revertsWith("InvalidState"));
+      await assert.rejects(campaign.connect(alice).claimRefund.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.finalizeCampaign.staticCall(), revertsWith("InvalidState"));
+      await assert.rejects(campaign.reclaimFailedTokens.staticCall(), revertsWith("InvalidState"));
     });
 
     await t.test("non-contributor cannot claim tokens", async () => {

@@ -175,7 +175,35 @@ Suggested commit message:
 feat: settle successful campaigns and support investor token claims
 ```
 
+## Step 6: failure finalization and refunds implemented
+
+Anyone can call `finalizeCampaign()` on an Active campaign at or after the
+deadline. Since reaching the hard cap immediately changes Active to Successful,
+an expired Active campaign is underfunded and becomes Failed. Finalization moves
+no funds and cannot be repeated. Successful and Settled campaigns cannot fail.
+
+Contributors call `claimRefund()` to recover their full original contribution
+(network transaction fees are separate). A separate refund flag prevents double
+claims while preserving contribution history. totalRefunded tracks payouts.
+Failed payments revert the flag and accounting, allowing retries. Reentrancy
+protection prevents nested withdrawals. One receiver rejecting its refund does
+not block other investors from claiming.
+
+The issuer calls `reclaimFailedTokens()` once to recover the offered tokens.
+This is independent of refunds: returning token escrow cannot withdraw investor
+ETH or block later refund claims. The issuer cannot settle a failed campaign.
+
+Tests include exact-deadline finalization, two investors recovering 0.2 and 0.15
+ETH, duplicate/unauthorized claims, forbidden state transitions, an empty failed
+campaign, rejected refund rollback, and a refund receiver attempting reentrancy.
+
+Suggested commit message:
+
+```text
+feat: finalize failed campaigns and support secure investor refunds
+```
+
 ## Next step
 
-Implement deadline-based failure finalization, individual refunds, and return of
-failed-campaign escrow to the issuer.
+Integrate campaigns with the existing tokenized assets and frontend, then prepare
+the successful and failed campaign demonstrations.
